@@ -98,10 +98,39 @@ cat("k:", args$k, "\n")
 cat("Seed:", args$seed, "\n")
 cat(strrep("=", 70), "\n\n")
 
-# Load data matrix
+# Load data matrix with error handling
 cat("Loading data matrix...\n")
-exp_matrix <- as.matrix(fread(args$data.matrix))
-cat("Matrix dimensions:", nrow(exp_matrix), "cells x", ncol(exp_matrix), "markers\n\n")
+tryCatch({
+  if (!file.exists(args$data.matrix)) {
+    stop("Data matrix file not found: ", args$data.matrix)
+  }
+  
+  # Read the matrix file
+  dt <- fread(args$data.matrix)
+  
+  # Check if first column contains cell IDs (non-numeric)
+  if (ncol(dt) > 0 && !is.numeric(dt[[1]])) {
+    cat("Detected cell IDs in first column\n")
+    cell_ids <- dt[[1]]
+    dt <- dt[, -1, with = FALSE]
+    exp_matrix <- as.matrix(dt)
+    rownames(exp_matrix) <- cell_ids
+  } else {
+    exp_matrix <- as.matrix(dt)
+  }
+  
+  # Ensure column names are preserved (marker names)
+  if (is.null(colnames(exp_matrix))) {
+    warning("No column names detected - markers will be numbered")
+    colnames(exp_matrix) <- paste0("Marker_", 1:ncol(exp_matrix))
+  }
+  
+  cat("Matrix dimensions:", nrow(exp_matrix), "cells x", ncol(exp_matrix), "markers\n")
+  cat("Markers:", paste(colnames(exp_matrix), collapse = ", "), "\n\n")
+  
+}, error = function(e) {
+  stop("Error loading data matrix: ", e$message)
+})
 
 # Initialize results
 res <- NULL
@@ -118,15 +147,33 @@ if (args$mode == "train") {
   
   # Load true labels
   cat("Loading true labels...\n")
-  true_labels <- readLines(gzfile(args$data.true_labels))
+  tryCatch({
+    if (!file.exists(args$data.true_labels)) {
+      stop("True labels file not found: ", args$data.true_labels)
+    }
+    true_labels <- readLines(gzfile(args$data.true_labels))
+    
+    # Check if number of labels matches number of cells
+    if (length(true_labels) != nrow(exp_matrix)) {
+      stop("Number of labels (", length(true_labels), 
+           ") does not match number of cells (", nrow(exp_matrix), ")")
+    }
+    
+  }, error = function(e) {
+    stop("Error loading true labels: ", e$message)
+  })
   
   # Remove any unassigned cells
   assigned_idx <- true_labels != "unassigned"
+  cat("Found", sum(!assigned_idx), "unassigned cells (will be removed from training)\n")
   exp_matrix <- exp_matrix[assigned_idx, ]
   true_labels <- true_labels[assigned_idx]
   
   cat("Training on", length(true_labels), "labeled cells\n")
-  cat("Cell types:", length(unique(true_labels)), "\n\n")
+  cat("Cell types:", length(unique(true_labels)), "\n")
+  cat("Cell type distribution:\n")
+  print(table(true_labels))
+  cat("\n")
   
   # Train GateMeClass
   cat("Extracting marker table...\n")
@@ -157,8 +204,16 @@ if (args$mode == "train") {
   
   # Load marker table
   cat("Loading marker table...\n")
-  marker_table <- as.data.frame(fread(args$marker_table))
-  marker_table[is.na(marker_table)] <- "*"  # Replace NA with wildcards
+  tryCatch({
+    if (!file.exists(args$marker_table)) {
+      stop("Marker table file not found: ", args$marker_table)
+    }
+    marker_table <- as.data.frame(fread(args$marker_table))
+    marker_table[is.na(marker_table)] <- "*"  # Replace NA with wildcards
+    
+  }, error = function(e) {
+    stop("Error loading marker table: ", e$message)
+  })
   
   cat("Marker table loaded with", nrow(marker_table), "cell types\n\n")
   print(marker_table)
@@ -187,15 +242,33 @@ if (args$mode == "train") {
   
   # Load true labels for training
   cat("Loading true labels for training...\n")
-  true_labels <- readLines(gzfile(args$data.true_labels))
+  tryCatch({
+    if (!file.exists(args$data.true_labels)) {
+      stop("True labels file not found: ", args$data.true_labels)
+    }
+    true_labels <- readLines(gzfile(args$data.true_labels))
+    
+    # Check if number of labels matches number of cells
+    if (length(true_labels) != nrow(exp_matrix)) {
+      stop("Number of labels (", length(true_labels), 
+           ") does not match number of cells (", nrow(exp_matrix), ")")
+    }
+    
+  }, error = function(e) {
+    stop("Error loading true labels: ", e$message)
+  })
   
   # Remove any unassigned cells from training data
   assigned_idx <- true_labels != "unassigned"
+  cat("Found", sum(!assigned_idx), "unassigned cells\n")
   training_matrix <- exp_matrix[assigned_idx, ]
   training_labels <- true_labels[assigned_idx]
   
   cat("Training on", length(training_labels), "labeled cells\n")
-  cat("Cell types:", length(unique(training_labels)), "\n\n")
+  cat("Cell types:", length(unique(training_labels)), "\n")
+  cat("Cell type distribution:\n")
+  print(table(training_labels))
+  cat("\n")
   
   # Train and annotate
   cat("Training and annotating...\n")
