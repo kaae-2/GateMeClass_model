@@ -13,16 +13,12 @@ if (!require("GateMeClass", quietly = TRUE)) {
   devtools::install_github("simo1c/GateMeClass", quiet = TRUE)
 }
 
-
-# Automated cell type annotation for flow/CyTOF data
-# Output format compatible with CyAnno and flow_metrics
-
 library(argparse)
 library(GateMeClass)
 library(data.table)
 
 # Create argument parser
-parser <- ArgumentParser(description = "Run GateMeClass annotation on flow/CyTOF data")
+parser <- ArgumentParser(description = "Run GateMeClass with train/test split")
 
 # Required omnibenchmark arguments
 parser$add_argument("--output_dir", "-o", 
@@ -35,31 +31,23 @@ parser$add_argument("--name", "-n",
                    required = TRUE,
                    help = "Name of the dataset")
 
-# Input files (match your YAML stage inputs)
-parser$add_argument("--data.matrix",
+# Input files - SEPARATE train and test
+parser$add_argument("--data.train_matrix",
                    type = "character",
                    required = TRUE,
-                   help = "Path to preprocessed data matrix (.matrix.gz)")
+                   help = "Path to training data matrix (.matrix.gz)")
 
-parser$add_argument("--data.true_labels",
+parser$add_argument("--data.train_labels",
                    type = "character",
-                   required = FALSE,
-                   default = NULL,
-                   help = "Path to true labels file (.true_labels.gz) - optional, for training mode")
+                   required = TRUE,
+                   help = "Path to training labels (.true_labels.gz)")
+
+parser$add_argument("--data.test_matrix",
+                   type = "character",
+                   required = TRUE,
+                   help = "Path to test data matrix (.matrix.gz)")
 
 # GateMeClass-specific parameters
-parser$add_argument("--marker_table",
-                   type = "character",
-                   required = FALSE,
-                   default = NULL,
-                   help = "Path to marker table file (optional)")
-
-parser$add_argument("--mode",
-                   type = "character",
-                   default = "train_and_annotate",
-                   choices = c("annotate", "train", "train_and_annotate"),
-                   help = "GateMeClass mode: 'annotate' (with marker table), 'train' (extract marker table), or 'train_and_annotate'")
-
 parser$add_argument("--GMM_parameterization",
                    type = "character",
                    default = "V",
@@ -81,11 +69,6 @@ parser$add_argument("--k",
                    default = 20,
                    help = "k parameter for k-NN label refinement")
 
-parser$add_argument("--narrow_marker_table",
-                   action = "store_true",
-                   default = FALSE,
-                   help = "Use narrow marker table format")
-
 parser$add_argument("--seed",
                    type = "integer",
                    default = 1,
@@ -94,16 +77,17 @@ parser$add_argument("--seed",
 # Parse arguments
 args <- parser$parse_args()
 
-# Create output directory if it doesn't exist
+# Create output directory
 dir.create(args$output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Print configuration
 cat(strrep("=", 70), "\n")
-cat("GateMeClass Configuration\n")
+cat("GateMeClass Train/Test Configuration\n")
 cat(strrep("=", 70), "\n")
 cat("Dataset name:", args$name, "\n")
-cat("Mode:", args$mode, "\n")
-cat("Input matrix:", args$data.matrix, "\n")
+cat("Training matrix:", args$data.train_matrix, "\n")
+cat("Training labels:", args$data.train_labels, "\n")
+cat("Test matrix:", args$data.test_matrix, "\n")
 cat("Output directory:", args$output_dir, "\n")
 cat("GMM parameterization:", args$GMM_parameterization, "\n")
 cat("Reject option:", args$reject_option, "\n")
@@ -112,288 +96,204 @@ cat("k:", args$k, "\n")
 cat("Seed:", args$seed, "\n")
 cat(strrep("=", 70), "\n\n")
 
-# Load data matrix with error handling
-cat("Loading data matrix...\n")
-tryCatch({
-  if (!file.exists(args$data.matrix)) {
-    stop("Data matrix file not found: ", args$data.matrix)
-  }
-  
-  # Read the matrix file (gzipped CSV)
-  dt <- fread(args$data.matrix)
-  
-  # Check if first column contains cell IDs (non-numeric)
-  if (ncol(dt) > 0 && !is.numeric(dt[[1]])) {
-    cat("Detected cell IDs in first column\n")
-    cell_ids <- dt[[1]]
-    dt <- dt[, -1, with = FALSE]
-    exp_matrix <- as.matrix(dt)
-    rownames(exp_matrix) <- cell_ids
-  } else {
-    exp_matrix <- as.matrix(dt)
-  }
-  
-  # Ensure column names are preserved (marker names)
-  if (is.null(colnames(exp_matrix))) {
-    warning("No column names detected - markers will be numbered")
-    colnames(exp_matrix) <- paste0("Marker_", 1:ncol(exp_matrix))
-  }
-  
-  cat("Matrix dimensions:", nrow(exp_matrix), "cells x", ncol(exp_matrix), "markers\n")
-  cat("Markers:", paste(colnames(exp_matrix), collapse = ", "), "\n\n")
-  
-}, error = function(e) {
-  stop("Error loading data matrix: ", e$message)
-})
-
-# Helper function to load and convert labels
+# ============================================================================
+# Helper function: Load and convert numeric labels to cell type names
+# ============================================================================
 load_and_convert_labels <- function(label_file) {
-  # Read numeric labels
+  cat("Loading labels from:", label_file, "\n")
+  
+  # Read labels
   if (grepl("\\.gz$", label_file)) {
-    labels_numeric <- readLines(gzfile(label_file))
+    labels_raw <- readLines(gzfile(label_file))
   } else {
-    labels_numeric <- readLines(label_file)
+    labels_raw <- readLines(label_file)
   }
-  labels_numeric <- as.numeric(labels_numeric)
+  
+  # Try to convert to numeric
+  labels_numeric <- suppressWarnings(as.numeric(labels_raw))
+  
+  # Remove NA values (from empty lines or headers)
+  if (any(is.na(labels_numeric))) {
+    na_count <- sum(is.na(labels_numeric))
+    cat("  Removing", na_count, "non-numeric/empty lines\n")
+    labels_raw <- labels_raw[!is.na(labels_numeric)]
+    labels_numeric <- labels_numeric[!is.na(labels_numeric)]
+  }
   
   # Find the mapping file
-  # Try multiple possible locations
-  mapping_paths <- c(
-    gsub("/preprocessing/data_preprocessing/default/.*\\.true_labels\\.gz", ".input_labels.gz", label_file),
-    gsub("\\.true_labels\\.gz", ".input_labels.gz", label_file),
-    gsub("/data_preprocessing/default/", "/", gsub("\\.true_labels\\.gz", ".input_labels.gz", label_file))
-  )
+  # From: .../preprocessing/.../data_import_train.true_labels.gz
+  # To:   .../data/data_import/data_import.input_labels.gz
   
-  label_mapping <- NULL
-  mapping_file_used <- NULL
-  for (path in mapping_paths) {
-    if (file.exists(path)) {
-      cat("Found label mapping at:", path, "\n")
-      label_mapping <- fread(path)
-      mapping_file_used <- path
-      break
-    }
+  # Go up directories until we find the data directory
+  base_dir <- dirname(dirname(dirname(label_file)))  # Go up 3 levels
+  dataset_name <- sub("_train\\.true_labels\\.gz$", "", basename(label_file))
+  dataset_name <- sub("_test\\.true_labels\\.gz$", "", dataset_name)
+  
+  mapping_file <- file.path(base_dir, paste0(dataset_name, ".input_labels.gz"))
+  
+  cat("  Looking for mapping file at:", mapping_file, "\n")
+  
+  if (!file.exists(mapping_file)) {
+    cat("  ERROR: Mapping file not found!\n")
+    cat("  Tried:", mapping_file, "\n")
+    stop("Label mapping file is required but not found")
   }
   
-  if (is.null(label_mapping)) {
-    cat("WARNING: Could not find label mapping file.\n")
-    cat("Tried paths:\n")
-    for (p in mapping_paths) cat("  -", p, "\n")
-    cat("Returning numeric labels as strings...\n")
-    return(as.character(labels_numeric))
-  }
+  # Load the mapping
+  cat("  ✓ Found mapping file\n")
+  label_mapping <- fread(mapping_file)
   
   # Convert numeric IDs to cell type names
   labels_string <- label_mapping$population[match(labels_numeric, label_mapping$label)]
   
-  cat("Converted", length(labels_numeric), "numeric labels to cell type names\n")
-  cat("Unique cell types:", length(unique(labels_string)), "\n")
-  cat("Example labels:", paste(head(unique(labels_string), 5), collapse=", "), "...\n")
+  cat("  ✓ Converted", length(labels_numeric), "numeric labels to cell type names\n")
+  cat("  Unique cell types:", length(unique(labels_string)), "\n")
+  cat("  Example labels:", paste(head(unique(labels_string), 3), collapse=", "), "...\n\n")
   
   return(labels_string)
 }
 
-# Initialize results
-res <- NULL
-marker_table <- NULL
-
-# Execute based on mode
-if (args$mode == "train") {
-  # Training mode: extract marker table from annotated data
-  cat("Running in TRAINING mode - extracting marker table\n")
-  
-  if (is.null(args$data.true_labels)) {
-    stop("Training mode requires --data.true_labels argument")
+# ============================================================================
+# Load TRAINING data
+# ============================================================================
+cat("Loading TRAINING data...\n")
+tryCatch({
+  if (!file.exists(args$data.train_matrix)) {
+    stop("Training matrix not found: ", args$data.train_matrix)
   }
   
-  # Load true labels
-  cat("Loading true labels...\n")
-  tryCatch({
-    if (!file.exists(args$data.true_labels)) {
-      stop("True labels file not found: ", args$data.true_labels)
-    }
-    
-    # Load and convert labels
-    true_labels <- load_and_convert_labels(args$data.true_labels)
-    
-    # Check if number of labels matches number of cells
-    if (length(true_labels) != nrow(exp_matrix)) {
-      stop("Number of labels (", length(true_labels), 
-           ") does not match number of cells (", nrow(exp_matrix), ")")
-    }
-    
-  }, error = function(e) {
-    stop("Error loading true labels: ", e$message)
-  })
+  # Read training matrix
+  train_dt <- fread(args$data.train_matrix)
   
-  # Remove any unassigned cells
-  assigned_idx <- true_labels != "unassigned"
-  cat("Found", sum(!assigned_idx), "unassigned cells (will be removed from training)\n")
-  exp_matrix <- exp_matrix[assigned_idx, , drop = FALSE]
-  true_labels <- true_labels[assigned_idx]
+  # Check if first column contains cell IDs
+  if (ncol(train_dt) > 0 && !is.numeric(train_dt[[1]])) {
+    cat("  Detected cell IDs in first column\n")
+    train_cell_ids <- train_dt[[1]]
+    train_dt <- train_dt[, -1, with = FALSE]
+    train_matrix <- as.matrix(train_dt)
+    rownames(train_matrix) <- train_cell_ids
+  } else {
+    train_matrix <- as.matrix(train_dt)
+  }
   
-  cat("Training on", length(true_labels), "labeled cells\n")
-  cat("Cell types:", length(unique(true_labels)), "\n")
-  cat("Cell type distribution:\n")
-  print(table(true_labels))
-  cat("\n")
+  # Ensure column names are preserved
+  if (is.null(colnames(train_matrix))) {
+    warning("No column names detected - markers will be numbered")
+    colnames(train_matrix) <- paste0("Marker_", 1:ncol(train_matrix))
+  }
   
-  # Train GateMeClass
-  cat("Extracting marker table...\n")
-  marker_table <- GateMeClass_train(
-    reference = exp_matrix,
-    labels = true_labels,
-    GMM_parameterization = args$GMM_parameterization,
-    verbose = TRUE,
-    seed = args$seed
-  )
+  cat("  Training matrix:", nrow(train_matrix), "cells x", ncol(train_matrix), "markers\n")
+  cat("  Markers:", paste(colnames(train_matrix), collapse = ", "), "\n")
   
-  cat("\nMarker table extracted successfully!\n\n")
-  print(marker_table)
+}, error = function(e) {
+  stop("Error loading training matrix: ", e$message)
+})
+
+# Load training labels
+train_labels <- load_and_convert_labels(args$data.train_labels)
+
+if (length(train_labels) != nrow(train_matrix)) {
+  stop("Number of training labels (", length(train_labels), 
+       ") does not match number of training cells (", nrow(train_matrix), ")")
+}
+
+cat("Training set cell type distribution:\n")
+print(table(train_labels))
+cat("\n")
+
+# ============================================================================
+# Load TEST data
+# ============================================================================
+cat("Loading TEST data...\n")
+tryCatch({
+  if (!file.exists(args$data.test_matrix)) {
+    stop("Test matrix not found: ", args$data.test_matrix)
+  }
   
-  # Save marker table (auxiliary output)
+  # Read test matrix
+  test_dt <- fread(args$data.test_matrix)
+  
+  # Check if first column contains cell IDs
+  if (ncol(test_dt) > 0 && !is.numeric(test_dt[[1]])) {
+    cat("  Detected cell IDs in first column\n")
+    test_cell_ids <- test_dt[[1]]
+    test_dt <- test_dt[, -1, with = FALSE]
+    test_matrix <- as.matrix(test_dt)
+    rownames(test_matrix) <- test_cell_ids
+  } else {
+    test_matrix <- as.matrix(test_dt)
+  }
+  
+  # Ensure column names match training
+  if (is.null(colnames(test_matrix))) {
+    colnames(test_matrix) <- colnames(train_matrix)
+  }
+  
+  cat("  Test matrix:", nrow(test_matrix), "cells x", ncol(test_matrix), "markers\n")
+  cat("  Markers:", paste(colnames(test_matrix), collapse = ", "), "\n\n")
+  
+  # Verify markers match
+  if (!identical(colnames(train_matrix), colnames(test_matrix))) {
+    stop("Training and test matrices have different markers!")
+  }
+  
+}, error = function(e) {
+  stop("Error loading test matrix: ", e$message)
+})
+
+# ============================================================================
+# Train on TRAINING set, Predict on TEST set
+# ============================================================================
+cat(strrep("=", 70), "\n")
+cat("TRAINING AND PREDICTION\n")
+cat(strrep("=", 70), "\n")
+cat("Training on", nrow(train_matrix), "cells...\n")
+cat("Will predict on", nrow(test_matrix), "test cells...\n\n")
+
+res <- GateMeClass_annotate(
+  exp_matrix = test_matrix,  # ← Predict on TEST set only!
+  marker_table = NULL,
+  train_parameters = list(
+    reference = train_matrix,
+    labels = train_labels
+  ),
+  GMM_parameterization = args$GMM_parameterization,
+  reject_option = args$reject_option,
+  sampling = args$sampling,
+  k = args$k,
+  verbose = TRUE,
+  seed = args$seed
+)
+
+# ============================================================================
+# Save results
+# ============================================================================
+cat("\n", strrep("=", 70), "\n")
+cat("RESULTS\n")
+cat(strrep("=", 70), "\n")
+cat("Test set predictions:\n")
+print(table(res$labels))
+cat("\n")
+
+# Main output: predictions for test cells
+prediction_file <- file.path(args$output_dir, 
+                             paste0(args$name, "_predicted_labels.txt"))
+
+writeLines(res$labels, prediction_file)
+cat("✓ Predicted labels saved to:", prediction_file, "\n")
+cat("  Format: Plain text, one label per line (", length(res$labels), "test cells)\n")
+
+# Auxiliary outputs
+if (!is.null(res$marker_table)) {
   marker_table_path <- file.path(args$output_dir, 
                                   paste0(args$name, ".marker_table.gz"))
-  fwrite(marker_table, marker_table_path, sep = "\t", compress = "gzip")
-  cat("Marker table saved to:", marker_table_path, "\n")
-  
-} else if (args$mode == "annotate") {
-  # Annotation mode: use provided marker table
-  cat("Running in ANNOTATION mode - using provided marker table\n")
-  
-  if (is.null(args$marker_table)) {
-    stop("Annotation mode requires --marker_table argument")
-  }
-  
-  # Load marker table
-  cat("Loading marker table...\n")
-  tryCatch({
-    if (!file.exists(args$marker_table)) {
-      stop("Marker table file not found: ", args$marker_table)
-    }
-    marker_table <- as.data.frame(fread(args$marker_table))
-    marker_table[is.na(marker_table)] <- "*"  # Replace NA with wildcards
-    
-  }, error = function(e) {
-    stop("Error loading marker table: ", e$message)
-  })
-  
-  cat("Marker table loaded with", nrow(marker_table), "cell types\n\n")
-  print(marker_table)
-  
-  # Annotate
-  cat("\nAnnotating cells...\n")
-  res <- GateMeClass_annotate(
-    exp_matrix = exp_matrix,
-    marker_table = marker_table,
-    GMM_parameterization = args$GMM_parameterization,
-    reject_option = args$reject_option,
-    sampling = args$sampling,
-    k = args$k,
-    verbose = TRUE,
-    narrow_marker_table = args$narrow_marker_table,
-    seed = args$seed
-  )
-  
-} else if (args$mode == "train_and_annotate") {
-  # Combined mode: train and annotate in one step
-  cat("Running in TRAIN_AND_ANNOTATE mode\n")
-  
-  if (is.null(args$data.true_labels)) {
-    stop("Train and annotate mode requires --data.true_labels argument")
-  }
-  
-  # Load true labels for training
-  cat("Loading true labels for training...\n")
-  tryCatch({
-    if (!file.exists(args$data.true_labels)) {
-      stop("True labels file not found: ", args$data.true_labels)
-    }
-    
-    # Load and convert labels
-    true_labels <- load_and_convert_labels(args$data.true_labels)
-    
-    # Check if number of labels matches number of cells
-    if (length(true_labels) != nrow(exp_matrix)) {
-      stop("Number of labels (", length(true_labels), 
-           ") does not match number of cells (", nrow(exp_matrix), ")")
-    }
-    
-  }, error = function(e) {
-    stop("Error loading true labels: ", e$message)
-  })
-  
-  # Remove any unassigned cells from training data
-  assigned_idx <- true_labels != "unassigned"
-  cat("Found", sum(!assigned_idx), "unassigned cells\n")
-  training_matrix <- exp_matrix[assigned_idx, , drop = FALSE]
-  training_labels <- true_labels[assigned_idx]
-  
-  cat("Training on", length(training_labels), "labeled cells\n")
-  cat("Cell types:", length(unique(training_labels)), "\n")
-  cat("Cell type distribution:\n")
-  print(table(training_labels))
-  cat("\n")
-  
-  cat("Full matrix markers:", paste(colnames(exp_matrix), collapse=", "), "\n")
-  cat("Training matrix markers:", paste(colnames(training_matrix), collapse=", "), "\n\n")
-  
-  # Train and annotate
-  cat("Training and annotating...\n")
-  res <- GateMeClass_annotate(
-    exp_matrix = exp_matrix,
-    marker_table = NULL,
-    train_parameters = list(
-      reference = training_matrix,
-      labels = training_labels
-    ),
-    GMM_parameterization = args$GMM_parameterization,
-    reject_option = args$reject_option,
-    sampling = args$sampling,
-    k = args$k,
-    verbose = TRUE,
-    seed = args$seed
-  )
-  
-  marker_table <- res$marker_table
+  fwrite(res$marker_table, marker_table_path, sep = "\t", compress = "gzip")
+  cat("  Marker table saved to:", marker_table_path, "\n")
 }
 
-# Save results if annotation was performed
-if (!is.null(res)) {
-  cat("\n", strrep("=", 70), "\n")
-  cat("Annotation Results\n")
-  cat(strrep("=", 70), "\n")
-  cat("Label distribution:\n")
-  print(table(res$labels))
-  cat("\n")
-  
-  # ============================================================================
-  # MAIN OUTPUT: Plain text file with predicted labels (matches CyAnno format)
-  # ============================================================================
-  # This is the file that flow_metrics will use for evaluation
-  prediction_file <- file.path(args$output_dir, 
-                               paste0(args$name, "_predicted_labels.txt"))
-  
-  writeLines(res$labels, prediction_file)
-  cat("✓ Predicted labels saved to:", prediction_file, "\n")
-  cat("  Format: Plain text, one label per line (", length(res$labels), "cells)\n")
-  
-  # ============================================================================
-  # AUXILIARY OUTPUTS: Additional files for reference/debugging
-  # ============================================================================
-  
-  # Save marker table used (for interpretation)
-  if (!is.null(marker_table)) {
-    marker_table_path <- file.path(args$output_dir, 
-                                    paste0(args$name, ".marker_table.gz"))
-    fwrite(marker_table, marker_table_path, sep = "\t", compress = "gzip")
-    cat("  Marker table saved to:", marker_table_path, "\n")
-  }
-  
-  # Save cell signatures (for debugging/analysis)
-  signatures_path <- file.path(args$output_dir, 
-                               paste0(args$name, ".cell_signatures.gz"))
-  fwrite(res$cell_signatures, signatures_path, sep = "\t", compress = "gzip")
-  cat("  Cell signatures saved to:", signatures_path, "\n")
-}
+signatures_path <- file.path(args$output_dir, 
+                             paste0(args$name, ".cell_signatures.gz"))
+fwrite(res$cell_signatures, signatures_path, sep = "\t", compress = "gzip")
+cat("  Cell signatures saved to:", signatures_path, "\n")
 
+cat("\n✓ GateMeClass completed successfully!\n")
