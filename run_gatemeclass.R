@@ -146,6 +146,53 @@ tryCatch({
   stop("Error loading data matrix: ", e$message)
 })
 
+# Helper function to load and convert labels
+load_and_convert_labels <- function(label_file) {
+  # Read numeric labels
+  if (grepl("\\.gz$", label_file)) {
+    labels_numeric <- readLines(gzfile(label_file))
+  } else {
+    labels_numeric <- readLines(label_file)
+  }
+  labels_numeric <- as.numeric(labels_numeric)
+  
+  # Find the mapping file
+  # Try multiple possible locations
+  mapping_paths <- c(
+    gsub("/preprocessing/data_preprocessing/default/.*\\.true_labels\\.gz", ".input_labels.gz", label_file),
+    gsub("\\.true_labels\\.gz", ".input_labels.gz", label_file),
+    gsub("/data_preprocessing/default/", "/", gsub("\\.true_labels\\.gz", ".input_labels.gz", label_file))
+  )
+  
+  label_mapping <- NULL
+  mapping_file_used <- NULL
+  for (path in mapping_paths) {
+    if (file.exists(path)) {
+      cat("Found label mapping at:", path, "\n")
+      label_mapping <- fread(path)
+      mapping_file_used <- path
+      break
+    }
+  }
+  
+  if (is.null(label_mapping)) {
+    cat("WARNING: Could not find label mapping file.\n")
+    cat("Tried paths:\n")
+    for (p in mapping_paths) cat("  -", p, "\n")
+    cat("Returning numeric labels as strings...\n")
+    return(as.character(labels_numeric))
+  }
+  
+  # Convert numeric IDs to cell type names
+  labels_string <- label_mapping$population[match(labels_numeric, label_mapping$label)]
+  
+  cat("Converted", length(labels_numeric), "numeric labels to cell type names\n")
+  cat("Unique cell types:", length(unique(labels_string)), "\n")
+  cat("Example labels:", paste(head(unique(labels_string), 5), collapse=", "), "...\n")
+  
+  return(labels_string)
+}
+
 # Initialize results
 res <- NULL
 marker_table <- NULL
@@ -166,12 +213,8 @@ if (args$mode == "train") {
       stop("True labels file not found: ", args$data.true_labels)
     }
     
-    # Read labels - handle both gzipped and plain text
-    if (grepl("\\.gz$", args$data.true_labels)) {
-      true_labels <- readLines(gzfile(args$data.true_labels))
-    } else {
-      true_labels <- readLines(args$data.true_labels)
-    }
+    # Load and convert labels
+    true_labels <- load_and_convert_labels(args$data.true_labels)
     
     # Check if number of labels matches number of cells
     if (length(true_labels) != nrow(exp_matrix)) {
@@ -186,7 +229,7 @@ if (args$mode == "train") {
   # Remove any unassigned cells
   assigned_idx <- true_labels != "unassigned"
   cat("Found", sum(!assigned_idx), "unassigned cells (will be removed from training)\n")
-  exp_matrix <- exp_matrix[assigned_idx, ]
+  exp_matrix <- exp_matrix[assigned_idx, , drop = FALSE]
   true_labels <- true_labels[assigned_idx]
   
   cat("Training on", length(true_labels), "labeled cells\n")
@@ -267,12 +310,8 @@ if (args$mode == "train") {
       stop("True labels file not found: ", args$data.true_labels)
     }
     
-    # Read labels - handle both gzipped and plain text
-    if (grepl("\\.gz$", args$data.true_labels)) {
-      true_labels <- readLines(gzfile(args$data.true_labels))
-    } else {
-      true_labels <- readLines(args$data.true_labels)
-    }
+    # Load and convert labels
+    true_labels <- load_and_convert_labels(args$data.true_labels)
     
     # Check if number of labels matches number of cells
     if (length(true_labels) != nrow(exp_matrix)) {
@@ -287,7 +326,7 @@ if (args$mode == "train") {
   # Remove any unassigned cells from training data
   assigned_idx <- true_labels != "unassigned"
   cat("Found", sum(!assigned_idx), "unassigned cells\n")
-  training_matrix <- exp_matrix[assigned_idx, ]
+  training_matrix <- exp_matrix[assigned_idx, , drop = FALSE]
   training_labels <- true_labels[assigned_idx]
   
   cat("Training on", length(training_labels), "labeled cells\n")
@@ -295,6 +334,9 @@ if (args$mode == "train") {
   cat("Cell type distribution:\n")
   print(table(training_labels))
   cat("\n")
+  
+  cat("Full matrix markers:", paste(colnames(exp_matrix), collapse=", "), "\n")
+  cat("Training matrix markers:", paste(colnames(training_matrix), collapse=", "), "\n\n")
   
   # Train and annotate
   cat("Training and annotating...\n")
