@@ -121,27 +121,35 @@ load_and_convert_labels <- function(label_file) {
   }
   
   # Find the mapping file
-  # From: .../preprocessing/.../data_import_train.true_labels.gz
-  # To:   .../data/data_import/data_import.input_labels.gz
+  # Path structure:
+  # Label file: .../preprocessing/data_preprocessing/.hash/data_import_train.true_labels.gz
+  # Mapping:    .../.hash_base/data_import.input_labels.gz
+  # Need to go up 4 directory levels!
   
-  # Go up directories until we find the data directory
-  base_dir <- dirname(dirname(dirname(label_file)))  # Go up 3 levels
+  base_dir <- dirname(dirname(dirname(dirname(label_file))))  # Up 4 levels
   dataset_name <- sub("_train\\.true_labels\\.gz$", "", basename(label_file))
   dataset_name <- sub("_test\\.true_labels\\.gz$", "", dataset_name)
   
   mapping_file <- file.path(base_dir, paste0(dataset_name, ".input_labels.gz"))
   
+  cat("  Label file path:", label_file, "\n")
+  cat("  Base directory (4 levels up):", base_dir, "\n")
+  cat("  Dataset name:", dataset_name, "\n")
   cat("  Looking for mapping file at:", mapping_file, "\n")
   
   if (!file.exists(mapping_file)) {
     cat("  ERROR: Mapping file not found!\n")
-    cat("  Tried:", mapping_file, "\n")
+    cat("  Searched at:", mapping_file, "\n")
+    cat("  Please verify the path structure.\n")
     stop("Label mapping file is required but not found")
   }
   
   # Load the mapping
   cat("  ✓ Found mapping file\n")
   label_mapping <- fread(mapping_file)
+  
+  cat("  Mapping file contents:\n")
+  print(head(label_mapping))
   
   # Convert numeric IDs to cell type names
   labels_string <- label_mapping$population[match(labels_numeric, label_mapping$label)]
