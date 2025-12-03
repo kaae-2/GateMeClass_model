@@ -2,6 +2,7 @@
 
 # GateMeClass module for omnibenchmark
 # Automated cell type annotation for flow/CyTOF data
+# Output format compatible with CyAnno and flow_metrics
 
 library(argparse)
 library(GateMeClass)
@@ -42,7 +43,7 @@ parser$add_argument("--marker_table",
 
 parser$add_argument("--mode",
                    type = "character",
-                   default = "annotate",
+                   default = "train_and_annotate",
                    choices = c("annotate", "train", "train_and_annotate"),
                    help = "GateMeClass mode: 'annotate' (with marker table), 'train' (extract marker table), or 'train_and_annotate'")
 
@@ -105,7 +106,7 @@ tryCatch({
     stop("Data matrix file not found: ", args$data.matrix)
   }
   
-  # Read the matrix file
+  # Read the matrix file (gzipped CSV)
   dt <- fread(args$data.matrix)
   
   # Check if first column contains cell IDs (non-numeric)
@@ -151,7 +152,13 @@ if (args$mode == "train") {
     if (!file.exists(args$data.true_labels)) {
       stop("True labels file not found: ", args$data.true_labels)
     }
-    true_labels <- readLines(gzfile(args$data.true_labels))
+    
+    # Read labels - handle both gzipped and plain text
+    if (grepl("\\.gz$", args$data.true_labels)) {
+      true_labels <- readLines(gzfile(args$data.true_labels))
+    } else {
+      true_labels <- readLines(args$data.true_labels)
+    }
     
     # Check if number of labels matches number of cells
     if (length(true_labels) != nrow(exp_matrix)) {
@@ -188,7 +195,7 @@ if (args$mode == "train") {
   cat("\nMarker table extracted successfully!\n\n")
   print(marker_table)
   
-  # Save marker table
+  # Save marker table (auxiliary output)
   marker_table_path <- file.path(args$output_dir, 
                                   paste0(args$name, ".marker_table.gz"))
   fwrite(marker_table, marker_table_path, sep = "\t", compress = "gzip")
@@ -246,7 +253,13 @@ if (args$mode == "train") {
     if (!file.exists(args$data.true_labels)) {
       stop("True labels file not found: ", args$data.true_labels)
     }
-    true_labels <- readLines(gzfile(args$data.true_labels))
+    
+    # Read labels - handle both gzipped and plain text
+    if (grepl("\\.gz$", args$data.true_labels)) {
+      true_labels <- readLines(gzfile(args$data.true_labels))
+    } else {
+      true_labels <- readLines(args$data.true_labels)
+    }
     
     # Check if number of labels matches number of cells
     if (length(true_labels) != nrow(exp_matrix)) {
@@ -299,27 +312,33 @@ if (!is.null(res)) {
   print(table(res$labels))
   cat("\n")
   
-  # Save predicted labels (main output for omnibenchmark)
-  labels_path <- file.path(args$output_dir, 
-                           paste0(args$name, ".labels.gz"))
-  writeLines(res$labels, gzfile(labels_path))
-  cat("Predicted labels saved to:", labels_path, "\n")
+  # ============================================================================
+  # MAIN OUTPUT: Plain text file with predicted labels (matches CyAnno format)
+  # ============================================================================
+  # This is the file that flow_metrics will use for evaluation
+  prediction_file <- file.path(args$output_dir, 
+                               paste0(args$name, "_predicted_labels.txt"))
   
-  # Save marker table used
+  writeLines(res$labels, prediction_file)
+  cat("✓ Predicted labels saved to:", prediction_file, "\n")
+  cat("  Format: Plain text, one label per line (", length(res$labels), "cells)\n")
+  
+  # ============================================================================
+  # AUXILIARY OUTPUTS: Additional files for reference/debugging
+  # ============================================================================
+  
+  # Save marker table used (for interpretation)
   if (!is.null(marker_table)) {
     marker_table_path <- file.path(args$output_dir, 
                                     paste0(args$name, ".marker_table.gz"))
     fwrite(marker_table, marker_table_path, sep = "\t", compress = "gzip")
-    cat("Marker table saved to:", marker_table_path, "\n")
+    cat("  Marker table saved to:", marker_table_path, "\n")
   }
   
-  # Save cell signatures
+  # Save cell signatures (for debugging/analysis)
   signatures_path <- file.path(args$output_dir, 
-                               paste0(args$name, ".signatures.gz"))
+                               paste0(args$name, ".cell_signatures.gz"))
   fwrite(res$cell_signatures, signatures_path, sep = "\t", compress = "gzip")
-  cat("Cell signatures saved to:", signatures_path, "\n")
+  cat("  Cell signatures saved to:", signatures_path, "\n")
 }
 
-cat("\n", strrep("=", 70), "\n")
-cat("GateMeClass completed successfully!\n")
-cat(strrep("=", 70), "\n")
