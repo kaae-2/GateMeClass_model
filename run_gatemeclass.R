@@ -1,14 +1,27 @@
 #!/usr/bin/env Rscript
 
-# GateMeClass module for omnibenchmark
-
+# Auto-install GateMeClass with all dependencies
 if (!require("GateMeClass", quietly = TRUE)) {
+  message("Installing GateMeClass and dependencies...")
+  
+  # Install BiocManager if needed
+  if (!require("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager", repos = "https://cloud.r-project.org/")
+  }
+  
+  # Install batchelor from Bioconductor
+  if (!require("batchelor", quietly = TRUE)) {
+    BiocManager::install("batchelor", update = FALSE, ask = FALSE)
+  }
+  
+  # Install devtools if needed
   if (!require("devtools", quietly = TRUE)) {
     install.packages("devtools", repos = "https://cloud.r-project.org/")
   }
-  devtools::install_github("HeleneDennemark/GateMeClass")
+  
+  # Install GateMeClass from GitHub
+  devtools::install_github("simo1c/GateMeClass", quiet = TRUE)
 }
-library(GateMeClass)
 
 
 # Automated cell type annotation for flow/CyTOF data
