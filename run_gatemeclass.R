@@ -1,6 +1,16 @@
 #!/usr/bin/env Rscript
 
 # GateMeClass module for omnibenchmark
+
+if (!require("GateMeClass", quietly = TRUE)) {
+  if (!require("devtools", quietly = TRUE)) {
+    install.packages("devtools", repos = "https://cloud.r-project.org/")
+  }
+  devtools::install_github("HeleneDennemark/GateMeClass")
+}
+library(GateMeClass)
+
+
 # Automated cell type annotation for flow/CyTOF data
 # Output format compatible with CyAnno and flow_metrics
 
