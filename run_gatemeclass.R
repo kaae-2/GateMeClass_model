@@ -4,16 +4,6 @@
 if (!require("GateMeClass", quietly = TRUE)) {
   message("Installing GateMeClass and dependencies...")
   
-  # Install BiocManager if needed
-  if (!require("BiocManager", quietly = TRUE)) {
-    install.packages("BiocManager", repos = "https://cloud.r-project.org/")
-  }
-  
-  # Install batchelor from Bioconductor
-  if (!require("batchelor", quietly = TRUE)) {
-    BiocManager::install("batchelor", update = FALSE, ask = FALSE)
-  }
-  
   # Install devtools if needed
   if (!require("devtools", quietly = TRUE)) {
     install.packages("devtools", repos = "https://cloud.r-project.org/")
