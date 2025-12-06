@@ -171,9 +171,12 @@ tryCatch({
     stop("Training matrix not found: ", args$data.train_matrix)
   }
   
-  # Read training matrix WITH EXPLICIT HEADER
+# Read training matrix WITH EXPLICIT HEADER
   cat("  Reading training matrix with header...\n")
   train_dt <- fread(args$data.train_matrix, header = TRUE)
+  
+  # Convert to data.frame (GateMeClass may expect data.frame instead of matrix)
+  train_matrix <- as.data.frame(train_dt)
   
   # Convert to matrix while preserving column names
   train_matrix <- as.matrix(train_dt)
@@ -212,12 +215,12 @@ tryCatch({
     stop("Test matrix not found: ", args$data.test_matrix)
   }
   
-  # Read test matrix WITH EXPLICIT HEADER
+# Read test matrix WITH EXPLICIT HEADER
   cat("  Reading test matrix with header...\n")
   test_dt <- fread(args$data.test_matrix, header = TRUE)
   
-  # Convert to matrix while preserving column names
-  test_matrix <- as.matrix(test_dt)
+  # Convert to data.frame (GateMeClass may expect data.frame instead of matrix)
+  test_matrix <- as.data.frame(test_dt)
   
   # Verify column names were preserved
   cat("  Test matrix dimensions:", nrow(test_matrix), "rows x", ncol(test_matrix), "cols\n")
