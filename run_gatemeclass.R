@@ -1,4 +1,3 @@
-
 #!/usr/bin/env Rscript
 
 # Auto-install GateMeClass with all dependencies
@@ -171,23 +170,20 @@ tryCatch({
     stop("Training matrix not found: ", args$data.train_matrix)
   }
   
-# Read training matrix WITH EXPLICIT HEADER
+  # Read training matrix WITH EXPLICIT HEADER
   cat("  Reading training matrix with header...\n")
   train_dt <- fread(args$data.train_matrix, header = TRUE)
   
-  # Convert to data.frame (GateMeClass may expect data.frame instead of matrix)
-  train_matrix <- as.data.frame(train_dt)
+  # Convert to matrix and TRANSPOSE (GateMeClass expects markers as rows!)
+  train_matrix <- t(as.matrix(train_dt))
   
-  # Convert to matrix while preserving column names
-  train_matrix <- as.matrix(train_dt)
+  # Verify dimensions and column names
+  cat("  Training matrix dimensions (after transpose):", nrow(train_matrix), "markers x", ncol(train_matrix), "cells\n")
+  cat("  Row names (markers):", paste(head(rownames(train_matrix)), collapse = ", "), "...\n")
+  cat("  Column names NULL?:", is.null(colnames(train_matrix)), "\n\n")
   
-  # Verify column names were preserved
-  cat("  Training matrix dimensions:", nrow(train_matrix), "rows x", ncol(train_matrix), "cols\n")
-  cat("  Column names preserved?:", !is.null(colnames(train_matrix)), "\n")
-  cat("  Training markers:", paste(colnames(train_matrix), collapse = ", "), "\n\n")
-  
-  if (is.null(colnames(train_matrix)) || all(colnames(train_matrix) == "")) {
-    stop("ERROR: Column names not found in training matrix!")
+  if (is.null(rownames(train_matrix)) || all(rownames(train_matrix) == "")) {
+    stop("ERROR: Marker names (row names) not found in training matrix!")
   }
   
 }, error = function(e) {
@@ -197,9 +193,9 @@ tryCatch({
 # Load training labels
 train_labels <- load_and_convert_labels(args$data.train_labels)
 
-if (length(train_labels) != nrow(train_matrix)) {
+if (length(train_labels) != ncol(train_matrix)) {
   stop("Number of training labels (", length(train_labels), 
-       ") does not match number of training cells (", nrow(train_matrix), ")")
+       ") does not match number of training cells (", ncol(train_matrix), ")")
 }
 
 cat("Training set cell type distribution:\n")
@@ -215,32 +211,32 @@ tryCatch({
     stop("Test matrix not found: ", args$data.test_matrix)
   }
   
-# Read test matrix WITH EXPLICIT HEADER
+  # Read test matrix WITH EXPLICIT HEADER
   cat("  Reading test matrix with header...\n")
   test_dt <- fread(args$data.test_matrix, header = TRUE)
   
-  # Convert to data.frame (GateMeClass may expect data.frame instead of matrix)
-  test_matrix <- as.data.frame(test_dt)
+  # Convert to matrix and TRANSPOSE
+  test_matrix <- t(as.matrix(test_dt))
   
-  # Verify column names were preserved
-  cat("  Test matrix dimensions:", nrow(test_matrix), "rows x", ncol(test_matrix), "cols\n")
-  cat("  Column names preserved?:", !is.null(colnames(test_matrix)), "\n")
-  cat("  Test markers:", paste(colnames(test_matrix), collapse = ", "), "\n\n")
+  # Verify dimensions and marker names
+  cat("  Test matrix dimensions (after transpose):", nrow(test_matrix), "markers x", ncol(test_matrix), "cells\n")
+  cat("  Row names (markers):", paste(head(rownames(test_matrix)), collapse = ", "), "...\n")
+  cat("  Column names NULL?:", is.null(colnames(test_matrix)), "\n\n")
   
-  if (is.null(colnames(test_matrix)) || all(colnames(test_matrix) == "")) {
-    stop("ERROR: Column names not found in test matrix!")
+  if (is.null(rownames(test_matrix)) || all(rownames(test_matrix) == "")) {
+    stop("ERROR: Marker names (row names) not found in test matrix!")
   }
   
   # Verify markers match between train and test
   cat("Verifying train/test marker compatibility...\n")
-  cat("  Train markers:", paste(colnames(train_matrix), collapse = ", "), "\n")
-  cat("  Test markers:", paste(colnames(test_matrix), collapse = ", "), "\n")
-  cat("  Markers identical?:", identical(colnames(train_matrix), colnames(test_matrix)), "\n\n")
+  cat("  Train markers:", paste(rownames(train_matrix), collapse = ", "), "\n")
+  cat("  Test markers:", paste(rownames(test_matrix), collapse = ", "), "\n")
+  cat("  Markers identical?:", identical(rownames(train_matrix), rownames(test_matrix)), "\n\n")
   
-  if (!identical(colnames(train_matrix), colnames(test_matrix))) {
+  if (!identical(rownames(train_matrix), rownames(test_matrix))) {
     cat("ERROR: Training and test matrices have different markers!\n")
-    cat("Train only:", setdiff(colnames(train_matrix), colnames(test_matrix)), "\n")
-    cat("Test only:", setdiff(colnames(test_matrix), colnames(train_matrix)), "\n")
+    cat("Train only:", setdiff(rownames(train_matrix), rownames(test_matrix)), "\n")
+    cat("Test only:", setdiff(rownames(test_matrix), rownames(train_matrix)), "\n")
     stop("Marker mismatch between training and test data")
   }
   
@@ -254,8 +250,8 @@ tryCatch({
 cat(strrep("=", 70), "\n")
 cat("TRAINING AND PREDICTION\n")
 cat(strrep("=", 70), "\n")
-cat("Training on", nrow(train_matrix), "cells...\n")
-cat("Will predict on", nrow(test_matrix), "test cells...\n\n")
+cat("Training on", ncol(train_matrix), "cells...\n")
+cat("Will predict on", ncol(test_matrix), "test cells...\n\n")
 
 res <- GateMeClass_annotate(
   exp_matrix = test_matrix,  # ← Predict on TEST set only!
