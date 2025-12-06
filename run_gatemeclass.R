@@ -1,3 +1,4 @@
+
 #!/usr/bin/env Rscript
 
 # Auto-install GateMeClass with all dependencies
@@ -170,28 +171,21 @@ tryCatch({
     stop("Training matrix not found: ", args$data.train_matrix)
   }
   
-  # Read training matrix
-  train_dt <- fread(args$data.train_matrix)
+  # Read training matrix WITH EXPLICIT HEADER
+  cat("  Reading training matrix with header...\n")
+  train_dt <- fread(args$data.train_matrix, header = TRUE)
   
-  # Check if first column contains cell IDs
-  if (ncol(train_dt) > 0 && !is.numeric(train_dt[[1]])) {
-    cat("  Detected cell IDs in first column\n")
-    train_cell_ids <- train_dt[[1]]
-    train_dt <- train_dt[, -1, with = FALSE]
-    train_matrix <- as.matrix(train_dt)
-    rownames(train_matrix) <- train_cell_ids
-  } else {
-    train_matrix <- as.matrix(train_dt)
+  # Convert to matrix while preserving column names
+  train_matrix <- as.matrix(train_dt)
+  
+  # Verify column names were preserved
+  cat("  Training matrix dimensions:", nrow(train_matrix), "rows x", ncol(train_matrix), "cols\n")
+  cat("  Column names preserved?:", !is.null(colnames(train_matrix)), "\n")
+  cat("  Training markers:", paste(colnames(train_matrix), collapse = ", "), "\n\n")
+  
+  if (is.null(colnames(train_matrix)) || all(colnames(train_matrix) == "")) {
+    stop("ERROR: Column names not found in training matrix!")
   }
-  
-  # Ensure column names are preserved
-  if (is.null(colnames(train_matrix))) {
-    warning("No column names detected - markers will be numbered")
-    colnames(train_matrix) <- paste0("Marker_", 1:ncol(train_matrix))
-  }
-  
-  cat("  Training matrix:", nrow(train_matrix), "cells x", ncol(train_matrix), "markers\n")
-  cat("  Markers:", paste(colnames(train_matrix), collapse = ", "), "\n")
   
 }, error = function(e) {
   stop("Error loading training matrix: ", e$message)
@@ -218,31 +212,33 @@ tryCatch({
     stop("Test matrix not found: ", args$data.test_matrix)
   }
   
-  # Read test matrix
-  test_dt <- fread(args$data.test_matrix)
+  # Read test matrix WITH EXPLICIT HEADER
+  cat("  Reading test matrix with header...\n")
+  test_dt <- fread(args$data.test_matrix, header = TRUE)
   
-  # Check if first column contains cell IDs
-  if (ncol(test_dt) > 0 && !is.numeric(test_dt[[1]])) {
-    cat("  Detected cell IDs in first column\n")
-    test_cell_ids <- test_dt[[1]]
-    test_dt <- test_dt[, -1, with = FALSE]
-    test_matrix <- as.matrix(test_dt)
-    rownames(test_matrix) <- test_cell_ids
-  } else {
-    test_matrix <- as.matrix(test_dt)
+  # Convert to matrix while preserving column names
+  test_matrix <- as.matrix(test_dt)
+  
+  # Verify column names were preserved
+  cat("  Test matrix dimensions:", nrow(test_matrix), "rows x", ncol(test_matrix), "cols\n")
+  cat("  Column names preserved?:", !is.null(colnames(test_matrix)), "\n")
+  cat("  Test markers:", paste(colnames(test_matrix), collapse = ", "), "\n\n")
+  
+  if (is.null(colnames(test_matrix)) || all(colnames(test_matrix) == "")) {
+    stop("ERROR: Column names not found in test matrix!")
   }
   
-  # Ensure column names match training
-  if (is.null(colnames(test_matrix))) {
-    colnames(test_matrix) <- colnames(train_matrix)
-  }
+  # Verify markers match between train and test
+  cat("Verifying train/test marker compatibility...\n")
+  cat("  Train markers:", paste(colnames(train_matrix), collapse = ", "), "\n")
+  cat("  Test markers:", paste(colnames(test_matrix), collapse = ", "), "\n")
+  cat("  Markers identical?:", identical(colnames(train_matrix), colnames(test_matrix)), "\n\n")
   
-  cat("  Test matrix:", nrow(test_matrix), "cells x", ncol(test_matrix), "markers\n")
-  cat("  Markers:", paste(colnames(test_matrix), collapse = ", "), "\n\n")
-  
-  # Verify markers match
   if (!identical(colnames(train_matrix), colnames(test_matrix))) {
-    stop("Training and test matrices have different markers!")
+    cat("ERROR: Training and test matrices have different markers!\n")
+    cat("Train only:", setdiff(colnames(train_matrix), colnames(test_matrix)), "\n")
+    cat("Test only:", setdiff(colnames(test_matrix), colnames(train_matrix)), "\n")
+    stop("Marker mismatch between training and test data")
   }
   
 }, error = function(e) {
