@@ -4,6 +4,15 @@
 # Accepts train matrix, train labels, and test matrix as inputs
 # Outputs predicted labels for test set
 
+# Auto-install GateMeClass if not available
+if (!require("GateMeClass", quietly = TRUE)) {
+  message("GateMeClass not found, installing from GitHub...")
+  if (!require("remotes", quietly = TRUE)) {
+    install.packages("remotes", repos = "https://cloud.r-project.org")
+  }
+  remotes::install_github("LeidenCBC/GateMeClass")
+}
+
 suppressPackageStartupMessages({
   library(GateMeClass)
   library(data.table)
