@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
-# GateMeClass wrapper for omnibenchmark - Simple R script
-# Works like the random baseline - no Python wrapper needed
+# GateMeClass wrapper for omnibenchmark
+# Handles unlabeled cells in training data
 
 library(argparse)
 
@@ -13,9 +13,6 @@ if (!require("GateMeClass", quietly = TRUE)) {
   }
   remotes::install_github("simo1c/GateMeClass")
 }
-
-library(GateMeClass)
-library(data.table)
 
 library(GateMeClass)
 library(data.table)
@@ -53,12 +50,35 @@ message("=================================\n")
 
 message("Loading training data...")
 train_dt <- fread(args$`train.data.matrix`)
-message("  Train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " markers")
-
 train_labels_numeric <- fread(args$labels_train, header=FALSE)[[1]]
-message("  Train labels: ", length(train_labels_numeric), " cells")
 
-# Convert to cell type names
+message("  Original train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " columns")
+message("  Original train labels: ", length(train_labels_numeric), " cells")
+
+# ============================================================================
+# Clean Training Data
+# ============================================================================
+
+# Remove 'col' column if it exists (bug in preprocessing)
+if ("col" %in% names(train_dt)) {
+  train_dt <- train_dt[, !names(train_dt) %in% "col", with=FALSE]
+  message("  Removed 'col' column from training data")
+}
+
+# Remove unlabeled cells from training (empty strings)
+valid_train_idx <- train_labels_numeric != ""
+n_unlabeled <- sum(!valid_train_idx)
+
+if (n_unlabeled > 0) {
+  message("  Removing ", n_unlabeled, " unlabeled cells from training set")
+  train_dt <- train_dt[valid_train_idx, ]
+  train_labels_numeric <- train_labels_numeric[valid_train_idx]
+}
+
+message("  Clean train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " markers")
+message("  Clean train labels: ", length(train_labels_numeric), " cells")
+
+# Convert numeric IDs to cell type names
 unique_ids <- sort(unique(train_labels_numeric))
 id_to_name <- setNames(paste0("CellType_", unique_ids), unique_ids)
 name_to_id <- setNames(unique_ids, paste0("CellType_", unique_ids))
@@ -68,9 +88,27 @@ train_labels_celltype <- sapply(train_labels_numeric, function(id) {
 })
 names(train_labels_celltype) <- NULL
 
-message("Loading test data...")
+message("  Cell types in training: ", paste(sort(unique(train_labels_celltype)), collapse=", "))
+
+# ============================================================================
+# Load and Clean Test Data
+# ============================================================================
+
+message("\nLoading test data...")
 test_dt <- fread(args$`test.data.matrix`)
+
+# Remove 'col' column if it exists
+if ("col" %in% names(test_dt)) {
+  test_dt <- test_dt[, !names(test_dt) %in% "col", with=FALSE]
+  message("  Removed 'col' column from test data")
+}
+
 message("  Test matrix: ", nrow(test_dt), " cells × ", ncol(test_dt), " markers")
+
+# Verify marker names match
+if (!all(names(train_dt) == names(test_dt))) {
+  stop("Marker names differ between train and test!")
+}
 
 # ============================================================================
 # Prepare Data for GateMeClass
@@ -86,13 +124,13 @@ message("  Train matrix transposed: ", nrow(train_matrix), " markers × ", ncol(
 message("  Test matrix transposed: ", nrow(test_matrix), " markers × ", ncol(test_matrix), " cells")
 
 # ============================================================================
-# Run GateMeClass - Method 3: Training and classification in one step
+# Run GateMeClass
 # ============================================================================
 
 message("\n=== Running GateMeClass Annotation ===")
 message("Using Method 3: Training and classification in one step")
 
-# According to the documentation, use train_parameters with reference and labels
+# Use train_parameters with reference and labels
 res <- GateMeClass_annotate(
   exp_matrix = test_matrix,
   marker_table = NULL,
@@ -129,12 +167,12 @@ predictions_numeric <- sapply(predictions_celltype, function(name) {
 })
 names(predictions_numeric) <- NULL
 
-# Format with .0 suffix (matching random baseline)
+# Format with .0 suffix (matching random baseline output format)
 res_char <- as.character(predictions_numeric)
 res_char <- paste0(res_char, ".0")
 res_char[is.na(predictions_numeric)] <- NA
 
-# Save
+# Save predictions
 outfile <- file.path(args$output_dir, paste0(args$name, "_predicted_labels.txt"))
 write.table(file=outfile, res_char, 
             col.names=FALSE, row.names=FALSE, quote=FALSE, na='""')
