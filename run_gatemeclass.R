@@ -11,7 +11,7 @@ if (!require("GateMeClass", quietly = TRUE)) {
   if (!require("remotes", quietly = TRUE)) {
     install.packages("remotes", repos = "https://cloud.r-project.org")
   }
-  remotes::install_github("LeidenCBC/GateMeClass")
+  remotes::install_github("simo1c/GateMeClass")
 }
 
 suppressPackageStartupMessages({
