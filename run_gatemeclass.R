@@ -3,7 +3,7 @@
 # GateMeClass wrapper for omnibenchmark with train/test split
 # Compatible with preprocessing script that outputs:
 #   - Numeric label IDs in train/test labels files
-#   - Label mapping file (ID <-> cell type name)
+#   - Label mapping file (ID <-> cell type name) as {dataset}.label_mapping.gz
 
 # Auto-install GateMeClass if not available
 if (!require("GateMeClass", quietly = TRUE)) {
@@ -11,7 +11,7 @@ if (!require("GateMeClass", quietly = TRUE)) {
   if (!require("remotes", quietly = TRUE)) {
     install.packages("remotes", repos = "https://cloud.r-project.org")
   }
-  remotes::install_github("simo1c/GateMeClass")
+  remotes::install_github("LeidenCBC/GateMeClass")
 }
 
 suppressPackageStartupMessages({
