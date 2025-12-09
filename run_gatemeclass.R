@@ -13,6 +13,19 @@ if (!require("GateMeClass", quietly = TRUE)) {
   }
   remotes::install_github("simo1c/GateMeClass")
 }
+#!/usr/bin/env Rscript
+
+# GateMeClass wrapper for omnibenchmark - SIMPLIFIED VERSION
+# Works with numeric labels directly (no label mapping file needed)
+
+# Auto-install GateMeClass if not available
+if (!require("GateMeClass", quietly = TRUE)) {
+  message("GateMeClass not found, installing from GitHub...")
+  if (!require("remotes", quietly = TRUE)) {
+    install.packages("remotes", repos = "https://cloud.r-project.org")
+  }
+  remotes::install_github("LeidenCBC/GateMeClass")
+}
 
 suppressPackageStartupMessages({
   library(GateMeClass)
@@ -35,8 +48,6 @@ option_list <- list(
               help = "Path to training labels (gzipped, numeric IDs)"),
   make_option("--data.test_matrix", type = "character",
               help = "Path to test data matrix (gzipped CSV)"),
-  make_option("--data.label_mapping", type = "character",
-              help = "Path to label mapping file (ID,cell_type)"),
   make_option("--GMM_parameterization", type = "character", default = "V",
               help = "GMM parameterization (V, E, or VV) [default: %default]"),
   make_option("--sampling", type = "double", default = 0.1,
@@ -50,8 +61,8 @@ option_list <- list(
 parser <- OptionParser(option_list = option_list)
 args <- parse_args(parser)
 
-# Validate required arguments
-required_args <- c("data.train_matrix", "data.train_labels", "data.test_matrix", "data.label_mapping")
+# Validate required arguments (label_mapping is now optional)
+required_args <- c("data.train_matrix", "data.train_labels", "data.test_matrix")
 missing_args <- required_args[!sapply(required_args, function(x) !is.null(args[[x]]))]
 if (length(missing_args) > 0) {
   stop("Missing required arguments: ", paste(missing_args, collapse = ", "))
@@ -64,7 +75,6 @@ message("=== GateMeClass Configuration ===")
 message("Train matrix: ", args$`data.train_matrix`)
 message("Train labels: ", args$`data.train_labels`)
 message("Test matrix: ", args$`data.test_matrix`)
-message("Label mapping: ", args$`data.label_mapping`)
 message("GMM parameterization: ", args$GMM_parameterization)
 message("Sampling: ", args$sampling)
 message("k: ", args$k)
@@ -72,96 +82,11 @@ message("Seed: ", args$seed)
 message("=================================\n")
 
 # ============================================================================
-# Load Label Mapping
-# ============================================================================
-
-load_label_mapping <- function(mapping_file) {
-  message("Loading label mapping from: ", mapping_file)
-  
-  if (!file.exists(mapping_file)) {
-    stop("Mapping file not found: ", mapping_file)
-  }
-  
-  # Read mapping (numeric ID, cell type name)
-  mapping <- fread(mapping_file, header = FALSE, col.names = c("id", "cell_type"))
-  
-  message("  Loaded ", nrow(mapping), " cell type mappings:")
-  for (i in seq_len(nrow(mapping))) {
-    message(sprintf("    %d: %s", mapping$id[i], mapping$cell_type[i]))
-  }
-  
-  # Create named vector: ID -> cell_type
-  label_map <- setNames(mapping$cell_type, mapping$id)
-  
-  # Create reverse mapping: cell_type -> ID
-  reverse_map <- setNames(mapping$id, mapping$cell_type)
-  
-  return(list(
-    forward = label_map,    # ID -> cell_type
-    reverse = reverse_map,   # cell_type -> ID
-    mapping_df = mapping
-  ))
-}
-
-# ============================================================================
-# Convert Numeric Labels to Cell Type Names
-# ============================================================================
-
-convert_numeric_to_celltype <- function(numeric_labels, label_map) {
-  message("Converting ", length(numeric_labels), " numeric labels to cell types...")
-  
-  # Convert to character for lookup
-  numeric_labels_char <- as.character(numeric_labels)
-  
-  # Convert using mapping
-  cell_types <- sapply(numeric_labels_char, function(id) {
-    cell_type <- label_map[id]
-    if (is.na(cell_type)) {
-      warning(sprintf("No mapping found for ID: %s", id))
-      return(NA)
-    }
-    return(cell_type)
-  })
-  
-  # Remove names attribute
-  names(cell_types) <- NULL
-  
-  message("  Converted to ", length(unique(cell_types)), " unique cell types")
-  return(cell_types)
-}
-
-# ============================================================================
-# Convert Cell Type Names to Numeric IDs
-# ============================================================================
-
-convert_celltype_to_numeric <- function(cell_types, reverse_map) {
-  message("Converting ", length(cell_types), " cell type predictions to numeric IDs...")
-  
-  numeric_ids <- sapply(cell_types, function(cell_type) {
-    id <- reverse_map[cell_type]
-    if (is.na(id)) {
-      warning(sprintf("No mapping found for cell type: %s", cell_type))
-      return(NA)
-    }
-    return(id)
-  })
-  
-  # Remove names attribute
-  names(numeric_ids) <- NULL
-  
-  message("  Converted to numeric IDs")
-  return(numeric_ids)
-}
-
-# ============================================================================
 # Load Data
 # ============================================================================
 
-# Load label mapping first
-label_maps <- load_label_mapping(args$`data.label_mapping`)
-
 # Load training data
-message("\nLoading training data...")
+message("Loading training data...")
 train_dt <- fread(args$`data.train_matrix`)
 message("  Train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " markers")
 
@@ -176,7 +101,18 @@ if (nrow(train_dt) != length(train_labels_numeric)) {
 }
 
 # Convert numeric IDs to cell type names for GateMeClass
-train_labels_celltype <- convert_numeric_to_celltype(train_labels_numeric, label_maps$forward)
+# Use simple naming: CellType_1, CellType_2, etc.
+unique_ids <- sort(unique(train_labels_numeric))
+id_to_name <- setNames(paste0("CellType_", unique_ids), unique_ids)
+name_to_id <- setNames(unique_ids, paste0("CellType_", unique_ids))
+
+train_labels_celltype <- sapply(train_labels_numeric, function(id) id_to_name[as.character(id)])
+names(train_labels_celltype) <- NULL
+
+message("  Converted numeric IDs to cell type names:")
+for (i in seq_along(unique_ids)) {
+  message(sprintf("    %s -> %s", unique_ids[i], id_to_name[as.character(unique_ids[i])]))
+}
 
 # Load test data
 message("\nLoading test data...")
@@ -259,53 +195,27 @@ dir.create(args$output_dir, recursive = TRUE, showWarnings = FALSE)
 
 message("\nSaving results...")
 
-# Convert predictions back to numeric IDs for metrics compatibility
-predictions_numeric <- convert_celltype_to_numeric(predictions_celltype, label_maps$reverse)
+# Convert predictions back to numeric IDs
+predictions_numeric <- sapply(predictions_celltype, function(name) {
+  id <- name_to_id[name]
+  if (is.na(id)) {
+    warning(sprintf("Unknown cell type: %s", name))
+    return(NA)
+  }
+  return(as.numeric(id))
+})
+names(predictions_numeric) <- NULL
 
 # Save predicted labels as numeric IDs
-predictions_file <- file.path(args$output_dir, paste0(args$name, ".predicted_labels.gz"))
+predictions_file <- file.path(args$output_dir, paste0(args$name, "_predicted_labels.txt"))
 write.table(
   predictions_numeric, 
-  file = gzfile(predictions_file), 
+  file = predictions_file, 
   quote = FALSE, 
   row.names = FALSE, 
   col.names = FALSE
 )
 message("Predictions (numeric) saved to: ", predictions_file)
-
-# Also save predictions as cell type names for inspection
-predictions_celltype_file <- file.path(args$output_dir, 
-                                       paste0(args$name, ".predicted_celltypes.txt"))
-write.table(
-  predictions_celltype,
-  file = predictions_celltype_file,
-  quote = FALSE,
-  row.names = FALSE,
-  col.names = FALSE
-)
-message("Predictions (cell types) saved to: ", predictions_celltype_file)
-
-# Save marker table (optional, for debugging)
-marker_table_file <- file.path(args$output_dir, paste0(args$name, ".marker_table.txt"))
-write.table(
-  result$marker_table,
-  file = marker_table_file,
-  quote = FALSE,
-  sep = "\t",
-  row.names = FALSE
-)
-message("Marker table saved to: ", marker_table_file)
-
-# Save cell signatures (optional, for debugging)
-signatures_file <- file.path(args$output_dir, paste0(args$name, ".signatures.txt"))
-write.table(
-  result$cell_signatures,
-  file = signatures_file,
-  quote = FALSE,
-  sep = "\t",
-  row.names = FALSE
-)
-message("Cell signatures saved to: ", signatures_file)
 
 # Print summary statistics
 message("\n=== Summary ===")
