@@ -14,6 +14,7 @@ if (!require("GateMeClass", quietly = TRUE)) {
   remotes::install_github("simo1c/GateMeClass")
 }
 
+
 library(GateMeClass)
 library(data.table)
 
@@ -51,6 +52,11 @@ message("=================================\n")
 message("Loading training data...")
 train_dt <- fread(args$`train.data.matrix`)
 train_labels_numeric <- fread(args$labels_train, header=FALSE)[[1]]
+
+# Standardize column names (replace spaces and special chars with underscores)
+# This prevents R's automatic name conversion issues
+names(train_dt) <- gsub("[^A-Za-z0-9_]", "_", names(train_dt))
+names(train_dt) <- gsub("_+", "_", names(train_dt))  # Remove duplicate underscores
 
 message("  Original train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " columns")
 message("  Original train labels: ", length(train_labels_numeric), " cells")
@@ -101,6 +107,10 @@ message("  Cell types in training: ", paste(sort(unique(train_labels_celltype)),
 
 message("\nLoading test data...")
 test_dt <- fread(args$`test.data.matrix`)
+
+# Standardize column names (same as training)
+names(test_dt) <- gsub("[^A-Za-z0-9_]", "_", names(test_dt))
+names(test_dt) <- gsub("_+", "_", names(test_dt))
 
 # Remove 'col' column if it exists
 if ("col" %in% names(test_dt)) {
