@@ -66,24 +66,29 @@ if ("col" %in% names(train_dt)) {
 }
 
 # Remove unlabeled cells from training (empty strings)
-valid_train_idx <- train_labels_numeric != ""
+# Convert to character and check for empty or NA
+train_labels_char <- as.character(train_labels_numeric)
+valid_train_idx <- !is.na(train_labels_char) & train_labels_char != "" & train_labels_char != '""'
 n_unlabeled <- sum(!valid_train_idx)
 
 if (n_unlabeled > 0) {
   message("  Removing ", n_unlabeled, " unlabeled cells from training set")
   train_dt <- train_dt[valid_train_idx, ]
   train_labels_numeric <- train_labels_numeric[valid_train_idx]
+  train_labels_char <- train_labels_char[valid_train_idx]
+} else {
+  message("  No unlabeled cells found in training set")
 }
 
 message("  Clean train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " markers")
-message("  Clean train labels: ", length(train_labels_numeric), " cells")
+message("  Clean train labels: ", length(train_labels_char), " cells")
 
 # Convert numeric IDs to cell type names
-unique_ids <- sort(unique(train_labels_numeric))
+unique_ids <- sort(unique(train_labels_char))
 id_to_name <- setNames(paste0("CellType_", unique_ids), unique_ids)
 name_to_id <- setNames(unique_ids, paste0("CellType_", unique_ids))
 
-train_labels_celltype <- sapply(train_labels_numeric, function(id) {
+train_labels_celltype <- sapply(train_labels_char, function(id) {
   id_to_name[as.character(id)]
 })
 names(train_labels_celltype) <- NULL
