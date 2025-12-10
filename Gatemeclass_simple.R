@@ -2,6 +2,7 @@
 
 # GateMeClass wrapper for omnibenchmark
 # Compatible with simple random train/test split preprocessing
+# WITH outlier handling to prevent GMM failures
 
 library(argparse)
 
@@ -21,7 +22,7 @@ library(data.table)
 # Argument Parser
 # ============================================================================
 
-parser <- ArgumentParser(description="GateMeClass caller with transformation")
+parser <- ArgumentParser(description="GateMeClass caller with transformation and outlier handling")
 
 parser$add_argument('--train.data.matrix', type="character", dest="train_matrix")
 parser$add_argument('--labels_train', type="character", dest="train_labels")
@@ -112,27 +113,39 @@ if ("col" %in% names(test_dt)) {
 message("  Test matrix: ", nrow(test_dt), " cells × ", ncol(test_dt), " markers")
 
 # ============================================================================
-# Apply Transformation
-# ============================================================================
-
-message("\nApplying arcsinh transformation (cofactor = ", args$cofactor, ")...")
-
-train_matrix_raw <- as.matrix(train_dt)
-test_matrix_raw <- as.matrix(test_dt)
-
-train_matrix_transformed <- asinh(train_matrix_raw / args$cofactor)
-test_matrix_transformed <- asinh(test_matrix_raw / args$cofactor)
-
-message("  Before: range = [", round(min(train_matrix_raw), 2), ", ", round(max(train_matrix_raw), 2), "]")
-message("  After:  range = [", round(min(train_matrix_transformed), 2), ", ", round(max(train_matrix_transformed), 2), "]")
-
-# ============================================================================
-# Prepare for GateMeClass
+# Apply Transformation WITH OUTLIER HANDLING
 # ============================================================================
 
 message("\nPreparing data for GateMeClass...")
 
-# Transpose (markers as rows, cells as columns)
+train_matrix_raw <- as.matrix(train_dt)
+test_matrix_raw <- as.matrix(test_dt)
+
+# Handle extreme outliers BEFORE transformation
+message("Handling outliers...")
+upper_bound <- quantile(as.vector(train_matrix_raw), 0.999, na.rm = TRUE)
+message("  99.9th percentile: ", round(upper_bound, 2))
+message("  Max before capping: ", round(max(train_matrix_raw, na.rm = TRUE), 2))
+
+# Cap extreme values at 99.9th percentile
+train_matrix_raw[train_matrix_raw > upper_bound] <- upper_bound
+test_matrix_raw[test_matrix_raw > upper_bound] <- upper_bound
+
+# Remove any negative values (shouldn't exist in CyTOF but just in case)
+train_matrix_raw[train_matrix_raw < 0] <- 0
+test_matrix_raw[test_matrix_raw < 0] <- 0
+
+message("  Max after capping: ", round(max(train_matrix_raw, na.rm = TRUE), 2))
+
+# Now apply arcsinh transformation
+message("Applying arcsinh transformation (cofactor = ", args$cofactor, ")...")
+train_matrix_transformed <- asinh(train_matrix_raw / args$cofactor)
+test_matrix_transformed <- asinh(test_matrix_raw / args$cofactor)
+
+message("  Final range: [", round(min(train_matrix_transformed, na.rm = TRUE), 2), ", ", 
+        round(max(train_matrix_transformed, na.rm = TRUE), 2), "]")
+
+# Transpose for GateMeClass (markers as rows, cells as columns)
 train_matrix <- t(train_matrix_transformed)
 test_matrix <- t(test_matrix_transformed)
 
