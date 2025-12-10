@@ -14,23 +14,34 @@ if (!require("GateMeClass", quietly = TRUE)) {
   remotes::install_github("simo1c/GateMeClass", quiet = TRUE)
 }
 
-library(GateMeClass)
-library(data.table)
-
 library(argparse)
 library(data.table)
 library(GateMeClass)
 
-# Parse arguments
+# Parse arguments - use omnibenchmark standard names
 parser <- ArgumentParser(description = "Run GateMeClass annotation")
-parser$add_argument("--train_matrix", required = TRUE, help = "Training matrix file (.gz)")
-parser$add_argument("--train_labels", required = TRUE, help = "Training labels file (.gz)")
-parser$add_argument("--test_matrix", required = TRUE, help = "Test matrix file (.gz)")
-parser$add_argument("--output", required = TRUE, help = "Output file for predictions")
-parser$add_argument("--GMM_parameterization", default = "V", help = "GMM parameterization")
-parser$add_argument("--sampling", type = "double", default = 0.1, help = "Sampling fraction")
-parser$add_argument("--k", type = "integer", default = 20, help = "Number of neighbors")
-parser$add_argument("--seed", type = "integer", default = 42, help = "Random seed")
+parser$add_argument("--train.data.matrix", type="character", dest="train_matrix", 
+                    help="Training matrix file (.gz)")
+parser$add_argument("--labels_train", type="character", dest="train_labels",
+                    help="Training labels file (.gz)")
+parser$add_argument("--test.data.matrix", type="character", dest="test_matrix",
+                    help="Test matrix file (.gz)")
+parser$add_argument("--labels_test", type="character", dest="test_labels",
+                    help="Test labels file (.gz)")
+parser$add_argument("--output_dir", "-o", dest="output_dir", type="character",
+                    help="Output directory", default=getwd())
+parser$add_argument("--name", "-n", dest="name", type="character", 
+                    help="Dataset name")
+
+# GateMeClass-specific parameters
+parser$add_argument("--GMM_parameterization", default = "V", 
+                    help = "GMM parameterization (V or E)")
+parser$add_argument("--sampling", type = "double", default = 0.1, 
+                    help = "Sampling fraction")
+parser$add_argument("--k", type = "integer", default = 20, 
+                    help = "Number of neighbors")
+parser$add_argument("--seed", type = "integer", default = 42, 
+                    help = "Random seed")
 
 args <- parser$parse_args()
 
@@ -38,6 +49,8 @@ cat("=== GateMeClass Configuration ===\n")
 cat("Train matrix:", args$train_matrix, "\n")
 cat("Train labels:", args$train_labels, "\n")
 cat("Test matrix:", args$test_matrix, "\n")
+cat("Output dir:", args$output_dir, "\n")
+cat("Dataset name:", args$name, "\n")
 cat("GMM:", args$GMM_parameterization, ", sampling:", args$sampling, ", k:", args$k, "\n")
 cat("=================================\n\n")
 
@@ -129,7 +142,6 @@ predictions <- GateMeClass_classify(
 cat("\n=== GateMeClass Annotation Complete ===\n")
 
 # Convert predictions back to numeric IDs
-# Extract the numeric part from "CellType_X"
 predicted_ids <- as.numeric(sub("CellType_", "", predictions))
 
 cat("Prediction summary:\n")
@@ -137,10 +149,10 @@ cat("  Unique predicted types:", length(unique(predicted_ids)), "\n")
 cat("  Predicted type counts:\n")
 print(table(predicted_ids))
 
-# Save predictions
+# Save predictions (omnibenchmark format)
+output_file <- file.path(args$output_dir, paste0(args$name, "_predicted_labels.txt"))
 output_dt <- data.table(label = paste0(predicted_ids, ".0"))
-fwrite(output_dt, args$output, sep = "\t", col.names = FALSE)
+fwrite(output_dt, output_file, sep = "\t", col.names = FALSE)
 
-cat("\nPredictions saved to:", args$output, "\n")
-
+cat("\nPredictions saved to:", output_file, "\n")
 
