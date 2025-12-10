@@ -14,102 +14,138 @@ if (!require("GateMeClass", quietly = TRUE)) {
   remotes::install_github("simo1c/GateMeClass", quiet = TRUE)
 }
 
-library(argparse)
-library(data.table)
 library(GateMeClass)
+library(data.table)
 
-# Parse arguments
-parser <- ArgumentParser(description = "Run GateMeClass annotation")
-parser$add_argument("--train.data.matrix", type="character", dest="train_matrix", 
-                    help="Training matrix file (.gz)")
-parser$add_argument("--labels_train", type="character", dest="train_labels",
-                    help="Training labels file (.gz)")
-parser$add_argument("--test.data.matrix", type="character", dest="test_matrix",
-                    help="Test matrix file (.gz)")
-parser$add_argument("--labels_test", type="character", dest="test_labels",
-                    help="Test labels file (.gz)")
-parser$add_argument("--output_dir", "-o", dest="output_dir", type="character",
-                    help="Output directory", default=getwd())
-parser$add_argument("--name", "-n", dest="name", type="character", 
-                    help="Dataset name")
+# ============================================================================
+# Argument Parser
+# ============================================================================
 
-# GateMeClass parameters
-parser$add_argument("--GMM_parameterization", default = "V", 
-                    help = "GMM parameterization (V or E)")
-parser$add_argument("--sampling", type = "double", default = 0.1, 
-                    help = "Sampling fraction")
-parser$add_argument("--k", type = "integer", default = 20, 
-                    help = "Number of neighbors")
-parser$add_argument("--seed", type = "integer", default = 42, 
-                    help = "Random seed")
-parser$add_argument("--cofactor", type = "double", default = 5, 
-                    help = "Cofactor for arcsinh transformation (5 for CyTOF)")
+parser <- ArgumentParser(description="GateMeClass caller with transformation")
+
+parser$add_argument('--train.data.matrix', type="character", dest="train_matrix")
+parser$add_argument('--labels_train', type="character", dest="train_labels")
+parser$add_argument('--test.data.matrix', type="character", dest="test_matrix")
+parser$add_argument('--labels_test', type="character", dest="test_labels")
+parser$add_argument('--seed', type="integer", default=42)
+parser$add_argument("--output_dir", "-o", dest="output_dir", type="character", default=getwd())
+parser$add_argument("--name", "-n", dest="name", type="character")
+parser$add_argument("--GMM_parameterization", type="character", default="V")
+parser$add_argument("--sampling", type="double", default=0.1)
+parser$add_argument("--k", type="integer", default=20)
+parser$add_argument("--cofactor", type="double", default=5)
 
 args <- parser$parse_args()
-
-cat("=== GateMeClass Configuration ===\n")
-cat("Train matrix:", args$train_matrix, "\n")
-cat("Train labels:", args$train_labels, "\n")
-cat("Test matrix:", args$test_matrix, "\n")
-cat("GMM:", args$GMM_parameterization, ", sampling:", args$sampling, ", k:", args$k, "\n")
-cat("Cofactor:", args$cofactor, "(arcsinh transformation)\n")
-cat("=================================\n\n")
-
 set.seed(args$seed)
 
-# Load training data
-cat("Loading training data...\n")
+message("=== GateMeClass Configuration ===")
+message("Train matrix: ", args$train_matrix)
+message("Train labels: ", args$train_labels)
+message("Test matrix: ", args$test_matrix)
+message("GMM: ", args$GMM_parameterization, ", sampling: ", args$sampling, ", k: ", args$k)
+message("Cofactor: ", args$cofactor, " (arcsinh transformation)")
+message("=================================\n")
+
+# ============================================================================
+# Load Data
+# ============================================================================
+
+message("Loading training data...")
 train_dt <- fread(args$train_matrix)
-train_labels_dt <- fread(args$train_labels)
+train_labels_numeric <- fread(args$train_labels, header=FALSE)[[1]]
 
-if ("col" %in% names(train_dt)) train_dt[, col := NULL]
-setnames(train_dt, gsub("[^A-Za-z0-9_]", "_", names(train_dt)))
+# Standardize column names (two-step process)
+names(train_dt) <- gsub("[^A-Za-z0-9_]", "_", names(train_dt))
+names(train_dt) <- gsub("_+", "_", names(train_dt))  # Remove duplicate underscores
 
-cat("  Train matrix:", nrow(train_dt), "cells ×", ncol(train_dt), "markers\n")
+message("  Original train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " columns")
+message("  Original train labels: ", length(train_labels_numeric), " cells")
 
-# Convert labels and filter unlabeled
-train_labels <- as.character(train_labels_dt[[1]])
-train_labels_celltype <- paste0("CellType_", train_labels)
+# ============================================================================
+# Clean Training Data
+# ============================================================================
 
-valid_idx <- !is.na(train_labels) & train_labels != "" & train_labels != '""'
-if (sum(!valid_idx) > 0) {
-  cat("  Removing", sum(!valid_idx), "unlabeled cells\n")
-  train_dt <- train_dt[valid_idx, ]
-  train_labels_celltype <- train_labels_celltype[valid_idx]
+# Remove 'col' column if it exists
+if ("col" %in% names(train_dt)) {
+  train_dt <- train_dt[, !names(train_dt) %in% "col", with=FALSE]
+  message("  Removed 'col' column from training data")
 }
 
-cat("  Training cells:", nrow(train_dt), "\n")
-cat("  Unique cell types:", length(unique(train_labels_celltype)), "\n\n")
+# Remove unlabeled cells
+train_labels_char <- as.character(train_labels_numeric)
+valid_train_idx <- !is.na(train_labels_char) & train_labels_char != "" & train_labels_char != '""'
+n_unlabeled <- sum(!valid_train_idx)
 
-# Load test data
-cat("Loading test data...\n")
+if (n_unlabeled > 0) {
+  message("  Removing ", n_unlabeled, " unlabeled cells from training set")
+  train_dt <- train_dt[valid_train_idx, ]
+  train_labels_numeric <- train_labels_numeric[valid_train_idx]
+  train_labels_char <- train_labels_char[valid_train_idx]
+}
+
+message("  Clean train matrix: ", nrow(train_dt), " cells × ", ncol(train_dt), " markers")
+
+# Convert to cell type names
+unique_ids <- sort(unique(train_labels_char))
+id_to_name <- setNames(paste0("CellType_", unique_ids), unique_ids)
+name_to_id <- setNames(unique_ids, paste0("CellType_", unique_ids))
+
+train_labels_celltype <- id_to_name[train_labels_char]
+names(train_labels_celltype) <- NULL
+
+message("  Cell types: ", length(unique(train_labels_celltype)), " unique types")
+
+# ============================================================================
+# Load and Clean Test Data
+# ============================================================================
+
+message("\nLoading test data...")
 test_dt <- fread(args$test_matrix)
-if ("col" %in% names(test_dt)) test_dt[, col := NULL]
-setnames(test_dt, gsub("[^A-Za-z0-9_]", "_", names(test_dt)))
-cat("  Test cells:", nrow(test_dt), "\n\n")
 
-# CRITICAL: Apply arcsinh transformation
-cat("Applying arcsinh transformation (cofactor =", args$cofactor, ")...\n")
+names(test_dt) <- gsub("[^A-Za-z0-9_]", "_", names(test_dt))
+names(test_dt) <- gsub("_+", "_", names(test_dt))
+
+if ("col" %in% names(test_dt)) {
+  test_dt <- test_dt[, !names(test_dt) %in% "col", with=FALSE]
+}
+
+message("  Test matrix: ", nrow(test_dt), " cells × ", ncol(test_dt), " markers")
+
+# ============================================================================
+# Apply Transformation
+# ============================================================================
+
+message("\nApplying arcsinh transformation (cofactor = ", args$cofactor, ")...")
+
 train_matrix_raw <- as.matrix(train_dt)
 test_matrix_raw <- as.matrix(test_dt)
 
-# Transform: asinh(x / cofactor)
 train_matrix_transformed <- asinh(train_matrix_raw / args$cofactor)
 test_matrix_transformed <- asinh(test_matrix_raw / args$cofactor)
 
-cat("  Transformation complete\n")
-cat("  Before: range =", range(train_matrix_raw)[1], "to", range(train_matrix_raw)[2], "\n")
-cat("  After: range =", range(train_matrix_transformed)[1], "to", range(train_matrix_transformed)[2], "\n\n")
+message("  Before: range = [", round(min(train_matrix_raw), 2), ", ", round(max(train_matrix_raw), 2), "]")
+message("  After:  range = [", round(min(train_matrix_transformed), 2), ", ", round(max(train_matrix_transformed), 2), "]")
 
-# Transpose for GateMeClass (markers × cells)
+# ============================================================================
+# Prepare for GateMeClass
+# ============================================================================
+
+message("\nPreparing data for GateMeClass...")
+
+# Transpose (markers as rows, cells as columns)
 train_matrix <- t(train_matrix_transformed)
 test_matrix <- t(test_matrix_transformed)
 
-# METHOD 3: Train and classify in one step
-cat("=== Running GateMeClass (Method 3) ===\n")
-cat("Training and classifying in one step...\n\n")
+message("  Train: ", nrow(train_matrix), " markers × ", ncol(train_matrix), " cells")
+message("  Test: ", nrow(test_matrix), " markers × ", ncol(test_matrix), " cells")
 
-result <- GateMeClass_annotate(
+# ============================================================================
+# Run GateMeClass
+# ============================================================================
+
+message("\n=== Running GateMeClass (Method 3) ===\n")
+
+res <- GateMeClass_annotate(
   exp_matrix = test_matrix,
   marker_table = NULL,
   train_parameters = list(
@@ -123,19 +159,22 @@ result <- GateMeClass_annotate(
   seed = args$seed
 )
 
-cat("\n=== GateMeClass Complete ===\n")
+message("\n=== GateMeClass Complete ===")
 
-# Extract predictions
-predictions <- result$labels
-predicted_ids <- as.numeric(sub("CellType_", "", predictions))
+# ============================================================================
+# Save Results
+# ============================================================================
 
-cat("Prediction summary:\n")
-cat("  Unique predicted types:", length(unique(predicted_ids)), "\n")
-print(table(predicted_ids))
+predictions_celltype <- res$labels
+predictions_numeric <- as.numeric(name_to_id[predictions_celltype])
 
-# Save predictions
-output_file <- file.path(args$output_dir, paste0(args$name, "_predicted_labels.txt"))
-output_dt <- data.table(label = paste0(predicted_ids, ".0"))
-fwrite(output_dt, output_file, sep = "\t", col.names = FALSE)
+res_char <- paste0(predictions_numeric, ".0")
+res_char[is.na(predictions_numeric)] <- NA
 
-cat("\nPredictions saved to:", output_file, "\n")
+outfile <- file.path(args$output_dir, paste0(args$name, "_predicted_labels.txt"))
+write.table(file=outfile, res_char, col.names=FALSE, row.names=FALSE, quote=FALSE, na='""')
+
+message("Predictions saved to: ", outfile)
+message("\nPrediction summary: ", length(unique(predictions_numeric)), " unique types")
+
+message("\nGateMeClass analysis complete!")
