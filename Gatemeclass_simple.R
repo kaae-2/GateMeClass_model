@@ -18,10 +18,6 @@ library(argparse)
 library(data.table)
 library(GateMeClass)
 
-library(argparse)
-library(data.table)
-library(GateMeClass)
-
 # Parse arguments
 parser <- ArgumentParser(description = "Run GateMeClass annotation")
 parser$add_argument("--train.data.matrix", type="character", dest="train_matrix", 
@@ -46,6 +42,8 @@ parser$add_argument("--k", type = "integer", default = 20,
                     help = "Number of neighbors")
 parser$add_argument("--seed", type = "integer", default = 42, 
                     help = "Random seed")
+parser$add_argument("--cofactor", type = "double", default = 5, 
+                    help = "Cofactor for arcsinh transformation (5 for CyTOF)")
 
 args <- parser$parse_args()
 
@@ -54,6 +52,7 @@ cat("Train matrix:", args$train_matrix, "\n")
 cat("Train labels:", args$train_labels, "\n")
 cat("Test matrix:", args$test_matrix, "\n")
 cat("GMM:", args$GMM_parameterization, ", sampling:", args$sampling, ", k:", args$k, "\n")
+cat("Cofactor:", args$cofactor, "(arcsinh transformation)\n")
 cat("=================================\n\n")
 
 set.seed(args$seed)
@@ -89,9 +88,22 @@ if ("col" %in% names(test_dt)) test_dt[, col := NULL]
 setnames(test_dt, gsub("[^A-Za-z0-9_]", "_", names(test_dt)))
 cat("  Test cells:", nrow(test_dt), "\n\n")
 
-# Transpose for GateMeClass
-train_matrix <- t(as.matrix(train_dt))
-test_matrix <- t(as.matrix(test_dt))
+# CRITICAL: Apply arcsinh transformation
+cat("Applying arcsinh transformation (cofactor =", args$cofactor, ")...\n")
+train_matrix_raw <- as.matrix(train_dt)
+test_matrix_raw <- as.matrix(test_dt)
+
+# Transform: asinh(x / cofactor)
+train_matrix_transformed <- asinh(train_matrix_raw / args$cofactor)
+test_matrix_transformed <- asinh(test_matrix_raw / args$cofactor)
+
+cat("  Transformation complete\n")
+cat("  Before: range =", range(train_matrix_raw)[1], "to", range(train_matrix_raw)[2], "\n")
+cat("  After: range =", range(train_matrix_transformed)[1], "to", range(train_matrix_transformed)[2], "\n\n")
+
+# Transpose for GateMeClass (markers × cells)
+train_matrix <- t(train_matrix_transformed)
+test_matrix <- t(test_matrix_transformed)
 
 # METHOD 3: Train and classify in one step
 cat("=== Running GateMeClass (Method 3) ===\n")
