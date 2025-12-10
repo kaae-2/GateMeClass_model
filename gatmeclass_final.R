@@ -1,4 +1,23 @@
 #!/usr/bin/env Rscript
+#!/usr/bin/env Rscript
+
+# GateMeClass wrapper for omnibenchmark
+# Handles unlabeled cells in training data
+
+library(argparse)
+
+# Auto-install GateMeClass if not available
+if (!require("GateMeClass", quietly = TRUE)) {
+  message("GateMeClass not found, installing from GitHub...")
+  if (!require("remotes", quietly = TRUE)) {
+    install.packages("remotes", repos = "https://cloud.r-project.org")
+  }
+  remotes::install_github("simo1c/GateMeClass")
+}
+
+
+library(GateMeClass)
+library(data.table)
 
 
 read_matrix <- function(path) {
