@@ -117,11 +117,10 @@ cat("  Test matrix transposed:", nrow(test_matrix), "markers ×", ncol(test_matr
 cat("=== Running GateMeClass Annotation (Method 2) ===\n")
 cat("Step 1: Training model...\n")
 
-# Train the model
+# Train the model (no marker_table parameter!)
 trained_model <- GateMeClass_train(
   reference = train_matrix,
   labels = train_labels_celltype,
-  marker_table = NULL,
   GMM_parameterization = args$GMM_parameterization,
   sampling = args$sampling,
   verbose = TRUE,
@@ -155,4 +154,3 @@ output_dt <- data.table(label = paste0(predicted_ids, ".0"))
 fwrite(output_dt, output_file, sep = "\t", col.names = FALSE)
 
 cat("\nPredictions saved to:", output_file, "\n")
-
