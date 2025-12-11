@@ -175,13 +175,25 @@ marker_table <- GateMeClass_train(
 )
 
 message("\n=== Training Complete ===")
-message("Marker table extracted:")
-message("  ", nrow(marker_table), " cell types with gating strategies")
-message("  ", ncol(marker_table) - 1, " markers used")
 
-# Log marker table for debugging
+# CRITICAL: Verify marker table format
+message("\nMarker table structure:")
+message("  Dimensions: ", nrow(marker_table), " rows × ", ncol(marker_table), " columns")
+message("  Column names: ", paste(names(marker_table), collapse = ", "))
+
+# GateMeClass_train returns NARROW format: "Cell" and "Gate" columns
+# This requires narrow_marker_table = TRUE in annotate
+is_narrow <- all(names(marker_table) %in% c("Cell", "Gate")) && ncol(marker_table) == 2
+
+if (!is_narrow) {
+  warning("UNEXPECTED: marker_table is NOT narrow format (Cell, Gate)!")
+  warning("  This may cause annotation to fail.")
+  warning("  Columns found: ", paste(names(marker_table), collapse = ", "))
+}
+
 message("\nMarker table preview:")
 print(head(marker_table, 10))
+message("\nMarker table format: ", if(is_narrow) "NARROW (Cell, Gate)" else "WIDE (multiple marker columns)")
 
 # =====================================================================
 # STEP 2: ANNOTATION - Apply marker table to test data
@@ -189,6 +201,8 @@ print(head(marker_table, 10))
 message("\n=== STEP 2: GateMeClass_annotate ===")
 message("Annotating test data using extracted marker table...\n")
 
+# GateMeClass_train returns narrow format (Cell, Gate), so narrow_marker_table = TRUE
+# If training returned wide format, this would need to be FALSE
 res <- GateMeClass_annotate(
   exp_matrix = test_matrix,
   marker_table = marker_table,
@@ -197,7 +211,7 @@ res <- GateMeClass_annotate(
   sampling = args$sampling,
   k = args$k,
   verbose = TRUE,
-  narrow_marker_table = TRUE,
+  narrow_marker_table = TRUE,  # GateMeClass_train returns narrow format
   seed = args$seed
 )
 
