@@ -5,6 +5,9 @@
 # - Drops technical markers before processing
 # - Applies arcsinh transformation
 # - Logs marker table between steps for transparency
+# - Patches:
+#   * set_marker_expression_GMM: robust against Mclust / predict.Mclust crashes
+#   * parse_marker_table: dumps raw marker_table to disk before erroring
 
 suppressPackageStartupMessages({
   library(argparse)
@@ -27,8 +30,9 @@ if (!requireNamespace("GateMeClass", quietly = TRUE)) {
 suppressPackageStartupMessages(library(GateMeClass))
 
 # ---------------------------------------------------------------------
-# Optional patch: make sure `type` in set_marker_expression_GMM
-# is always a scalar logical (avoids 'argument of length zero')
+# Patch 1: robust set_marker_expression_GMM
+#   - ensure 'type' is scalar logical
+#   - catch Mclust/predict.Mclust failures and fall back to "*" for that marker
 # ---------------------------------------------------------------------
 fix_set_marker_expression_GMM <- function() {
   ns <- asNamespace("GateMeClass")
@@ -46,7 +50,20 @@ fix_set_marker_expression_GMM <- function() {
     } else {
       type <- isTRUE(type[1])
     }
-    orig_fun(X, GMM_parameterization, type, RSS)
+
+    # Call the original function, but don't let it kill the whole pipeline
+    res <- try(
+      orig_fun(X, GMM_parameterization, type, RSS),
+      silent = TRUE
+    )
+
+    if (inherits(res, "try-error")) {
+      message("WARNING: set_marker_expression_GMM failed for one marker; ",
+              "falling back to '*' for all cells on this marker.")
+      return(rep("*", length(X)))
+    }
+
+    res
   }
 
   assignInNamespace(
@@ -54,7 +71,7 @@ fix_set_marker_expression_GMM <- function() {
     value = patched_fun,
     ns    = "GateMeClass"
   )
-  message("Patched GateMeClass::set_marker_expression_GMM successfully.")
+  message("Patched GateMeClass::set_marker_expression_GMM with error fallback.")
 }
 
 tryCatch(
@@ -63,6 +80,58 @@ tryCatch(
     message("WARNING: could not patch set_marker_expression_GMM: ", e$message)
   }
 )
+
+# ---------------------------------------------------------------------
+# Patch 2: hook into parse_marker_table() to dump the marker table
+# used by GateMeClass_train / GateMeClass_annotate BEFORE it errors
+# ---------------------------------------------------------------------
+fix_parse_marker_table <- function(outdir, dataset_name) {
+  ns <- asNamespace("GateMeClass")
+  if (!exists("parse_marker_table", envir = ns, inherits = FALSE)) {
+    message("parse_marker_table not found in GateMeClass namespace; skipping patch.")
+    return(invisible(NULL))
+  }
+
+  orig_fun <- get("parse_marker_table", envir = ns)
+  debug_file <- file.path(outdir,
+                          paste0(dataset_name, "_marker_table_raw.tsv"))
+
+  patched_fun <- function(marker_table, narrow_marker_table, extended_marker_table) {
+    # Try to dump once
+    try({
+      if (!file.exists(debug_file)) {
+        message("DEBUG: Writing raw marker_table used in parse_marker_table() to:\n  ",
+                debug_file)
+        dt <- if (data.table::is.data.table(marker_table)) {
+          marker_table
+        } else {
+          data.table::as.data.table(marker_table)
+        }
+        data.table::fwrite(dt, debug_file, sep = "\t")
+
+        # Simple duplicate check
+        if ("Cell" %in% names(marker_table)) {
+          dup_ct <- marker_table$Cell[duplicated(marker_table$Cell)]
+          if (length(dup_ct) > 0) {
+            message("DEBUG: duplicated Cell types detected in marker_table: ",
+                    paste(unique(dup_ct), collapse = ", "))
+          } else {
+            message("DEBUG: no duplicated Cell types in marker_table (by 'Cell' column).")
+          }
+        }
+      }
+    }, silent = TRUE)
+
+    orig_fun(marker_table, narrow_marker_table, extended_marker_table)
+  }
+
+  assignInNamespace(
+    x     = "parse_marker_table",
+    value = patched_fun,
+    ns    = "GateMeClass"
+  )
+  message("Patched GateMeClass::parse_marker_table for debug (marker_table will be dumped).")
+}
 
 # ---------------------------------------------------------------------
 # Argument parser
@@ -109,6 +178,16 @@ parser$add_argument("--cofactor",
 args <- parser$parse_args()
 set.seed(args$seed)
 
+dataset_name <- if (!is.null(args$name) && nzchar(args$name)) args$name else "gatemeclass"
+
+# Patch parse_marker_table now that we know output dir + dataset name
+tryCatch(
+  fix_parse_marker_table(args$output_dir, dataset_name),
+  error = function(e) {
+    message("WARNING: could not patch parse_marker_table: ", e$message)
+  }
+)
+
 message("=== GateMeClass Configuration (Method 2) ===")
 message("Train matrix: ", args$train_matrix)
 message("Train labels: ", args$train_labels)
@@ -144,8 +223,8 @@ if ("col" %in% names(train_dt)) {
 # Drop empty labels
 train_labels_char <- as.character(train_labels_numeric)
 valid_idx <- !is.na(train_labels_char) &
-             train_labels_char != "" &
-             train_labels_char != '""'
+  train_labels_char != "" &
+  train_labels_char != '""'
 
 if (sum(!valid_idx) > 0) {
   message("  Dropping ", sum(!valid_idx), " cells with empty/NA labels")
@@ -250,27 +329,26 @@ marker_table <- GateMeClass_train(
 message("\n=== Training Complete ===")
 
 # ---------------------------------------------------------------------
-# Marker table sanity checks
+# Marker table sanity checks (only reached if GateMeClass_train succeeds)
 # ---------------------------------------------------------------------
 message("\nMarker table structure:")
 message("  Dimensions: ", nrow(marker_table), " rows × ", ncol(marker_table), " columns")
 message("  Column names: ", paste(names(marker_table), collapse = ", "))
 
-# Drop duplicate cell types if present
+# Drop duplicate cell types if present (just in case)
 if ("Cell" %in% names(marker_table)) {
   dup <- duplicated(marker_table$Cell)
   if (any(dup)) {
-    message("WARNING: duplicated cell types in marker table: ",
+    message("WARNING: duplicated cell types in marker_table: ",
             paste(unique(marker_table$Cell[dup]), collapse = ", "))
     message("Keeping first occurrence of each and dropping duplicates.")
     marker_table <- marker_table[!dup, , drop = FALSE]
   }
 } else {
-  # Fallback: use rownames as cell identifiers if no 'Cell' column
   ct  <- rownames(marker_table)
   dup <- duplicated(ct)
   if (any(dup)) {
-    message("WARNING: duplicated rownames in marker table: ",
+    message("WARNING: duplicated rownames in marker_table: ",
             paste(unique(ct[dup]), collapse = ", "))
     message("Keeping first occurrence of each and dropping duplicates.")
     marker_table <- marker_table[!dup, , drop = FALSE]
@@ -282,7 +360,7 @@ print(utils::head(marker_table, 10))
 
 # Determine if marker_table is narrow (Cell / Gate) or wide
 is_narrow <- all(names(marker_table) %in% c("Cell", "Gate")) &&
-             ncol(marker_table) == 2
+  ncol(marker_table) == 2
 
 message("\nMarker table format: ",
         if (is_narrow) "NARROW (Cell, Gate)" else "WIDE (multiple marker columns)")
@@ -294,15 +372,15 @@ message("\n=== STEP 2: GateMeClass_annotate ===")
 message("Annotating test data using extracted marker table...\n")
 
 res <- GateMeClass_annotate(
-  exp_matrix          = test_matrix,
-  marker_table        = marker_table,
+  exp_matrix           = test_matrix,
+  marker_table         = marker_table,
   GMM_parameterization = args$GMM_parameterization,
-  reject_option       = FALSE,
-  sampling            = args$sampling,
-  k                   = args$k,
-  verbose             = TRUE,
-  narrow_marker_table = is_narrow,
-  seed                = args$seed
+  reject_option        = FALSE,
+  sampling             = args$sampling,
+  k                    = args$k,
+  verbose              = TRUE,
+  narrow_marker_table  = is_narrow,
+  seed                 = args$seed
 )
 
 message("\n=== Annotation Complete ===")
@@ -340,4 +418,5 @@ message("Label distribution:")
 print(table(predictions_celltype))
 
 message("\n=== SUCCESS ===")
+
 
