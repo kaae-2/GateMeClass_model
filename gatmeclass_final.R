@@ -4,6 +4,7 @@
 # Debug version:
 #  - Drops largest numeric label from TRAINING (treat as "unassigned")
 #  - Drops technical markers: Time, Cell_length, DNA1, DNA2, Viability, event_number
+#  - Drops markers with zero variance in training
 #  - Uses GateMeClass_annotate() with train_parameters (Method 3)
 
 suppressPackageStartupMessages({
@@ -41,7 +42,7 @@ parser$add_argument("--output_dir", "-o", dest = "output_dir", type = "character
 parser$add_argument("--name", "-n",        dest = "name",       type = "character")
 
 parser$add_argument("--GMM_parameterization", type = "character", default = "V")
-parser$add_argument("--sampling", type = "double", default = 0.1)
+parser$add_argument("--sampling", type = "double", default = 0.3)
 parser$add_argument("--k",        type = "integer", default = 20)
 parser$add_argument("--cofactor", type = "double", default = 5)
 
@@ -148,7 +149,7 @@ if ("col" %in% names(test_dt)) {
 message("  Original test matrix: ", nrow(test_dt), " cells × ", ncol(test_dt), " columns")
 
 # ============================================================================
-# Drop technical markers (Time, DNA, Viability, event_number)
+# Drop technical markers and zero-variance markers
 # ============================================================================
 
 technical_markers <- c("Time", "Cell_length", "DNA1", "DNA2", "Viability", "event_number")
@@ -168,7 +169,18 @@ if (length(drop_test) > 0) {
   test_dt <- test_dt[, !names(test_dt) %in% drop_test, with = FALSE]
 }
 
-# Sanity check: train/test marker sets must match
+# Drop markers with zero variance in training (flat markers)
+marker_var <- sapply(train_dt, function(x) var(as.numeric(x), na.rm = TRUE))
+flat_markers <- names(marker_var)[is.na(marker_var) | marker_var == 0]
+
+if (length(flat_markers) > 0) {
+  message("  Dropping flat markers (zero variance) from training and test: ",
+          paste(flat_markers, collapse = ", "))
+  train_dt <- train_dt[, !names(train_dt) %in% flat_markers, with = FALSE]
+  test_dt  <- test_dt[, !names(test_dt)  %in% flat_markers, with = FALSE]
+}
+
+# Final sanity: train/test marker sets must match
 if (!identical(names(train_dt), names(test_dt))) {
   stop("Train and test matrices have different marker sets after cleaning.")
 }
@@ -252,4 +264,3 @@ write.table(
 message("Predictions saved to: ", outfile)
 message("\nPrediction summary: ", length(unique(predictions_numeric)), " unique numeric labels")
 message("\nGateMeClass analysis complete!")
-
