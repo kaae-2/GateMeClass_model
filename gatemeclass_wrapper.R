@@ -32,8 +32,9 @@ suppressPackageStartupMessages({
 # ---------------------------------------------------------------------
 if (!requireNamespace("GateMeClass", quietly = TRUE)) {
   conda_env <- Sys.getenv("CONDA_DEFAULT_ENV")
-  local_src <- file.path(script_dir, "GateMeClass")
+  local_src <- file.path(script_dir, "gatemeclass_model")
   if (identical(conda_env, "gatemeclass") && dir.exists(local_src)) {
+    message("GateMeClass: installing from local source at ", local_src)
     if (!requireNamespace("remotes", quietly = TRUE)) {
       install.packages("remotes", repos = "https://cloud.r-project.org")
     }
@@ -47,6 +48,7 @@ if (!requireNamespace("GateMeClass", quietly = TRUE)) {
     )
   }
   if (!requireNamespace("GateMeClass", quietly = TRUE)) {
+    message("GateMeClass: installing from GitHub...")
     message("GateMeClass not found, installing from GitHub...")
     if (!requireNamespace("BiocManager", quietly = TRUE)) {
       install.packages("BiocManager", repos = "https://cloud.r-project.org")
