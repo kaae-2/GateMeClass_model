@@ -36,8 +36,8 @@ cmd=(
   --data.train_labels "${train_labels}"
   --data.test_matrix "${test_matrix}"
   --GMM_parameterization "V"
-  --sampling "1.0"
-  --k "20"
+  --sampling "0.2"
+  --k "10"
 )
 
 "${cmd[@]}"

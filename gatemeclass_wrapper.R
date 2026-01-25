@@ -24,21 +24,10 @@ suppressPackageStartupMessages({
 })
 
 # ---------------------------------------------------------------------
-# Install / load GateMeClass
+# Load GateMeClass from local library
 # ---------------------------------------------------------------------
 if (!requireNamespace("GateMeClass", quietly = TRUE)) {
-  local_src <- file.path(script_dir, "gatemeclass_model")
-  if (!dir.exists(local_src)) {
-    stop("Missing local GateMeClass source at ", local_src)
-  }
-  if (!requireNamespace("remotes", quietly = TRUE)) {
-    stop("Missing R package 'remotes'. Update the gatemeclass conda env.")
-  }
-  message("GateMeClass: installing from local source at ", local_src)
-  tryCatch(
-    remotes::install_local(local_src, upgrade = "never"),
-    error = function(e) stop("GateMeClass install failed: ", conditionMessage(e))
-  )
+  stop("Missing GateMeClass in ", local_lib, ". Ensure the package is available under models/gatemeclass/.r_libs.")
 }
 suppressPackageStartupMessages(library(GateMeClass))
 
@@ -310,7 +299,7 @@ for (idx in seq_along(test_members)) {
     reject_option = FALSE,
     sampling = args$sampling,
     k = k_to_use,
-    verbose = TRUE,
+    verbose = FALSE,
     seed = args$seed
   )
 
