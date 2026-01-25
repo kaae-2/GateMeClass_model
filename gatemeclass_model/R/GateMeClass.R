@@ -660,7 +660,7 @@ GateMeClass_train <- function(reference = NULL,
   cell_markers <- vector("list", length(celltypes))
   names(cell_markers) <- celltypes
 
-  pairs <- as.matrix(comboGrid(as.character(celltypes), as.character(celltypes), repetition = F))
+  pairs <- as.matrix(RcppAlgos::comboGrid(as.character(celltypes), as.character(celltypes), repetition = F))
   sampling_imp_vars <- floor(sampling_imp_vars * ncol(reference))
 
   for(i in 1:nrow(pairs)){
