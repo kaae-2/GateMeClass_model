@@ -186,6 +186,13 @@ parse_marker_table <- function(marker_table, narrow_marker_table, extended_marke
 
 set_marker_expression_GMM <- function(X, GMM_parameterization, type, RSS){
 
+  safe_mclust <- function(test, G, modelNames){
+    tryCatch(
+      Mclust(test, G = G, verbose = F, modelNames = modelNames),
+      error = function(e) NULL
+    )
+  }
+
   if(length(X) >= 100){
 
     sample <- X
@@ -227,7 +234,10 @@ set_marker_expression_GMM <- function(X, GMM_parameterization, type, RSS){
   }
 
   if(type){
-    cl <- Mclust(test, G = 2, verbose = F, modelNames = GMM_parameterization)
+    cl <- safe_mclust(test, G = 2, modelNames = GMM_parameterization)
+    if (is.null(cl) || !inherits(cl, "Mclust")) {
+      return(c("*"))
+    }
     max <- which.max(cl$parameters$mean)
     min <- which.min(cl$parameters$mean)
     temp <- rep(NA, length(X))
@@ -245,11 +255,17 @@ set_marker_expression_GMM <- function(X, GMM_parameterization, type, RSS){
     }
   }else{
 
-    cl <- Mclust(test, G = 3, verbose = F, modelNames = GMM_parameterization)
+    cl <- safe_mclust(test, G = 3, modelNames = GMM_parameterization)
+    if (is.null(cl) || !inherits(cl, "Mclust")) {
+      return(c("*"))
+    }
     n_cl <- length(table(cl$classification))
 
     if(n_cl == 2){
-      cl <- Mclust(test, G = 2, verbose = F, modelNames = GMM_parameterization)
+      cl <- safe_mclust(test, G = 2, modelNames = GMM_parameterization)
+      if (is.null(cl) || !inherits(cl, "Mclust")) {
+        return(c("*"))
+      }
       max <- which.max(cl$parameters$mean)
       min <- which.min(cl$parameters$mean)
 
