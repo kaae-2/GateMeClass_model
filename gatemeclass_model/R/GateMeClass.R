@@ -186,6 +186,10 @@ parse_marker_table <- function(marker_table, narrow_marker_table, extended_marke
 
 set_marker_expression_GMM <- function(X, GMM_parameterization, type, RSS){
 
+  if (length(type) == 0 || is.na(type)) {
+    return(c("*"))
+  }
+
   safe_mclust <- function(test, G, modelNames){
     tryCatch(
       Mclust(test, G = G, verbose = F, modelNames = modelNames),
