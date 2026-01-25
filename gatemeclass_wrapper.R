@@ -234,14 +234,6 @@ n_markers <- ncol(train_dt)
 simple_markers <- paste0("M", seq_len(n_markers))
 setnames(train_dt, names(train_dt), simple_markers)
 
-for (test_name in test_sample_names) {
-  if (ncol(test_list[[test_name]]) != n_markers) {
-    stop(sprintf("Test sample '%s' has %d markers, expected %d",
-                 test_name, ncol(test_list[[test_name]]), n_markers))
-  }
-  setnames(test_list[[test_name]], names(test_list[[test_name]]), simple_markers)
-}
-
 # ---------------------------------------------------------------------
 # Transform data (arcsinh)
 # ---------------------------------------------------------------------
