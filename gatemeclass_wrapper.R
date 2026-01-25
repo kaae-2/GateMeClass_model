@@ -21,15 +21,31 @@ dir.create(local_lib, recursive = TRUE, showWarnings = FALSE)
 suppressPackageStartupMessages({
   library(argparse)
   library(data.table)
+  library(dplyr)
+  library(stringi)
+  library(stringr)
+  library(caret)
+  library(mclust)
+  library(batchelor)
+  library(plyr)
 })
 
 # ---------------------------------------------------------------------
-# Load GateMeClass from local library
+# Load GateMeClass from local source
 # ---------------------------------------------------------------------
-if (!requireNamespace("GateMeClass", quietly = TRUE)) {
-  stop("Missing GateMeClass in ", local_lib, ". Ensure the package is available under models/gatemeclass/.r_libs.")
+comboGrid <- function(x, y, repetition = FALSE) {
+  grid <- expand.grid(x, y, stringsAsFactors = FALSE)
+  if (!repetition) {
+    grid <- grid[grid[[1]] != grid[[2]], , drop = FALSE]
+  }
+  as.matrix(grid)
 }
-suppressPackageStartupMessages(library(GateMeClass))
+
+local_src <- file.path(script_dir, "gatemeclass_model", "R", "GateMeClass.R")
+if (!file.exists(local_src)) {
+  stop("Missing GateMeClass source at ", local_src)
+}
+source(local_src)
 
 if (requireNamespace("caret", quietly = TRUE)) {
   assign("train", get("train", envir = asNamespace("caret")), envir = .GlobalEnv)
