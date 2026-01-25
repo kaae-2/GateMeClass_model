@@ -637,6 +637,8 @@ GateMeClass_train <- function(reference = NULL,
   marker_table <- cell_df
   marker_table$Cell <- paste0(marker_table$labels, as.character(1:nrow(marker_table)), sep = "__")
 
+  marker_table$Cell <- make.unique(as.character(marker_table$Cell))
+
   gate_parsed <- parse_marker_table(marker_table, T, F)
   gate_parsed <- gate_parsed$marker_table
   gate_parsed$Cell <- sapply(str_split(gate_parsed$Cell,"__"), `[`, 1)
