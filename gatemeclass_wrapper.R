@@ -40,9 +40,15 @@ orig_parse_marker_table <- parse_marker_table
 parse_marker_table <- function(marker_table, narrow_marker_table, extended_marker_table) {
   if (!is.null(marker_table) && "Cell" %in% names(marker_table)) {
     marker_table$Cell <- make.unique(as.character(marker_table$Cell))
+    if (any(duplicated(marker_table$Cell))) {
+      marker_table$Cell <- sprintf("%s__%d", as.character(marker_table$Cell), seq_len(nrow(marker_table)))
+    }
   }
   orig_parse_marker_table(marker_table, narrow_marker_table, extended_marker_table)
 }
+
+assign("parse_marker_table", parse_marker_table, envir = environment(GateMeClass_train))
+assign("parse_marker_table", parse_marker_table, envir = environment(GateMeClass_annotate))
 
 if (requireNamespace("caret", quietly = TRUE)) {
   assign("train", get("train", envir = asNamespace("caret")), envir = .GlobalEnv)
