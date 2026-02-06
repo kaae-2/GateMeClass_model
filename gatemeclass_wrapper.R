@@ -30,38 +30,18 @@ suppressPackageStartupMessages({
   library(plyr)
 })
 
-using_pkg <- FALSE
-if (requireNamespace("GateMeClass", quietly = TRUE)) {
-  suppressPackageStartupMessages(library(GateMeClass))
-  using_pkg <- TRUE
-} else {
-  gate_source <- file.path(script_dir, "gatemeclass_model", "R", "GateMeClass.R")
-  if (!file.exists(gate_source)) {
-    stop("Missing GateMeClass source at ", gate_source, ".")
-  }
-  source(gate_source)
+gate_source <- file.path(script_dir, "gatemeclass_model", "R", "GateMeClass.R")
+if (!file.exists(gate_source)) {
+  stop("Missing GateMeClass source at ", gate_source, ".")
 }
+source(gate_source)
 
-if (using_pkg) {
-  orig_parse_marker_table <- getFromNamespace("parse_marker_table", "GateMeClass")
-  assignInNamespace(
-    "parse_marker_table",
-    function(marker_table, narrow_marker_table, extended_marker_table) {
-      if (!is.null(marker_table) && "Cell" %in% names(marker_table)) {
-        marker_table$Cell <- make.unique(as.character(marker_table$Cell))
-      }
-      orig_parse_marker_table(marker_table, narrow_marker_table, extended_marker_table)
-    },
-    ns = "GateMeClass"
-  )
-} else {
-  orig_parse_marker_table <- parse_marker_table
-  parse_marker_table <- function(marker_table, narrow_marker_table, extended_marker_table) {
-    if (!is.null(marker_table) && "Cell" %in% names(marker_table)) {
-      marker_table$Cell <- make.unique(as.character(marker_table$Cell))
-    }
-    orig_parse_marker_table(marker_table, narrow_marker_table, extended_marker_table)
+orig_parse_marker_table <- parse_marker_table
+parse_marker_table <- function(marker_table, narrow_marker_table, extended_marker_table) {
+  if (!is.null(marker_table) && "Cell" %in% names(marker_table)) {
+    marker_table$Cell <- make.unique(as.character(marker_table$Cell))
   }
+  orig_parse_marker_table(marker_table, narrow_marker_table, extended_marker_table)
 }
 
 if (requireNamespace("caret", quietly = TRUE)) {
