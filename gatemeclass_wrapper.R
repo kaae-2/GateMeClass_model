@@ -19,42 +19,6 @@ dir.create(local_lib, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(local_lib, .libPaths()))
 Sys.setenv(R_LIBS_USER = local_lib)
 
-install_lock_dir <- file.path(local_lib, "00LOCK-gatemeclass-wrapper")
-
-with_install_lock <- function(action, timeout = 900, poll = 1) {
-  start_time <- Sys.time()
-  repeat {
-    if (dir.create(install_lock_dir, showWarnings = FALSE)) {
-      on.exit(unlink(install_lock_dir, recursive = TRUE), add = TRUE)
-      return(action())
-    }
-
-    if (as.numeric(difftime(Sys.time(), start_time, units = "secs")) > timeout) {
-      unlink(install_lock_dir, recursive = TRUE)
-    }
-
-    Sys.sleep(poll)
-  }
-}
-
-ensure_package <- function(pkg, install_action) {
-  if (requireNamespace(pkg, quietly = TRUE)) {
-    return(invisible(TRUE))
-  }
-
-  with_install_lock(function() {
-    if (!requireNamespace(pkg, quietly = TRUE)) {
-      install_action()
-    }
-  })
-
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    stop("Missing R package '", pkg, "'. Update the gatemeclass conda env.")
-  }
-
-  invisible(TRUE)
-}
-
 suppressPackageStartupMessages({
   library(argparse)
   library(data.table)
@@ -71,13 +35,7 @@ gate_source <- file.path(script_dir, "gatemeclass_model", "R", "GateMeClass.R")
 if (file.exists(gate_source)) {
   source(gate_source)
 } else {
-  ensure_package("remotes", function() {
-    install.packages("remotes", repos = "https://cloud.r-project.org", lib = local_lib)
-  })
-  ensure_package("GateMeClass", function() {
-    remotes::install_github("simo1c/GateMeClass", upgrade = "never", lib = local_lib)
-  })
-  suppressPackageStartupMessages(library(GateMeClass))
+  stop("Missing GateMeClass source at ", gate_source, ". Vendor the module into the repo.")
 }
 
 orig_parse_marker_table <- parse_marker_table
