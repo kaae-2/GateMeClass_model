@@ -82,7 +82,7 @@ parser$add_argument("--output_dir", "-o", type = "character", default = getwd())
 parser$add_argument("--name", "-n", type = "character", required = TRUE)
 parser$add_argument("--GMM_parameterization", type = "character", default = "V",
                     help = "GMM variance: 'V' (Variable) or 'E' (Equal)")
-parser$add_argument("--sampling", type = "double", default = 1.0,
+parser$add_argument("--sampling", type = "double", default = 0.1,
                     help = "Fraction of cells to use (0.0-1.0)")
 parser$add_argument("--k", type = "integer", default = 20,
                     help = "k parameter for KNN refinement")
@@ -252,7 +252,7 @@ for (idx in seq_along(test_members)) {
       labels = train_labels
     ),
     GMM_parameterization = args$GMM_parameterization,
-    reject_option = FALSE,
+    reject_option = TRUE,
     sampling = args$sampling,
     k = k_to_use,
     verbose = FALSE,
