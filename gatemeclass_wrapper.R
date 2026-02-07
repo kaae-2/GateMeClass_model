@@ -19,6 +19,20 @@ dir.create(local_lib, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(local_lib, .libPaths()))
 Sys.setenv(R_LIBS_USER = local_lib)
 
+thread_envs <- c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+if (all(Sys.getenv(thread_envs) == "")) {
+  cores <- parallel::detectCores(logical = TRUE)
+  if (is.na(cores) || cores < 1) {
+    cores <- 1
+  }
+  Sys.setenv(
+    OMP_NUM_THREADS = cores,
+    OPENBLAS_NUM_THREADS = cores,
+    MKL_NUM_THREADS = cores,
+    VECLIB_MAXIMUM_THREADS = cores
+  )
+}
+
 suppressPackageStartupMessages({
   library(argparse)
   library(data.table)
