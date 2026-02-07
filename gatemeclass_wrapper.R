@@ -91,6 +91,8 @@ parser$add_argument("--k", type = "integer", default = 20,
                     help = "k parameter for KNN refinement")
 parser$add_argument("--cofactor", type = "double", default = 5,
                     help = "Cofactor for arcsinh transformation")
+parser$add_argument("--sampling_imp_vars", type = "double", default = 0.01,
+                    help = "Fraction of training cells for variable-importance step")
 
 args <- parser$parse_args()
 set.seed(args$seed)
@@ -248,6 +250,7 @@ marker_table <- GateMeClass_train(
   reference = train_m,
   labels = train_labels,
   GMM_parameterization = args$GMM_parameterization,
+  sampling_imp_vars = args$sampling_imp_vars,
   seed = args$seed,
   verbose = FALSE
 )
