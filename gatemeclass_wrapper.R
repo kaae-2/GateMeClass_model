@@ -120,6 +120,25 @@ clean_member_name <- function(file_name) {
   clean
 }
 
+sanitize_matrix_dt <- function(dt, sample_name) {
+  na_count <- sum(is.na(dt))
+  if (na_count > 0) {
+    message(sprintf("GateMeClass: replacing %d missing values with 0 in '%s'", na_count, sample_name))
+    dt[is.na(dt)] <- 0
+  }
+
+  m <- as.matrix(dt)
+  non_finite <- !is.finite(m)
+  non_finite_count <- sum(non_finite)
+  if (non_finite_count > 0) {
+    message(sprintf("GateMeClass: replacing %d non-finite values with 0 in '%s'", non_finite_count, sample_name))
+    m[non_finite] <- 0
+    dt <- as.data.table(m)
+  }
+
+  dt
+}
+
 get_sample_number <- function(file_name, fallback) {
   base <- basename(file_name)
   base <- gsub("\\.csv(\\.gz)?$", "", base)
@@ -170,6 +189,7 @@ train_extract_dir <- file.path(tmp_root, "train_matrix")
 dir.create(train_extract_dir, showWarnings = FALSE, recursive = TRUE)
 train_matrix_path <- extract_member(args$`data.train_matrix`, train_members[[1]], train_extract_dir)
 train_dt <- fread(train_matrix_path, header = FALSE)
+train_dt <- sanitize_matrix_dt(train_dt, "train")
 
 label_members <- list_csv_members(args$`data.train_labels`)
 if (length(label_members) == 0) {
@@ -248,6 +268,7 @@ process_sample <- function(idx) {
       stop(sprintf("Test sample '%s' has %d markers, expected %d",
                    test_name, ncol(test_dt), n_markers))
     }
+    test_dt <- sanitize_matrix_dt(test_dt, test_name)
     setnames(test_dt, names(test_dt), simple_markers)
 
     test_m <- as.matrix(test_dt)
