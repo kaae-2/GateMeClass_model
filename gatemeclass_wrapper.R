@@ -239,33 +239,37 @@ process_sample <- function(idx) {
   test_member <- test_members[[idx]]
   test_name <- test_sample_names[[idx]]
 
-  test_path <- extract_member(args$`data.test_matrix`, test_member, test_extract_dir)
-  test_dt <- fread(test_path, header = FALSE)
-  unlink(test_path)
+  tryCatch({
+    test_path <- extract_member(args$`data.test_matrix`, test_member, test_extract_dir)
+    test_dt <- fread(test_path, header = FALSE)
+    unlink(test_path)
 
-  if (ncol(test_dt) != n_markers) {
-    stop(sprintf("Test sample '%s' has %d markers, expected %d",
-                 test_name, ncol(test_dt), n_markers))
-  }
-  setnames(test_dt, names(test_dt), simple_markers)
+    if (ncol(test_dt) != n_markers) {
+      stop(sprintf("Test sample '%s' has %d markers, expected %d",
+                   test_name, ncol(test_dt), n_markers))
+    }
+    setnames(test_dt, names(test_dt), simple_markers)
 
-  test_m <- as.matrix(test_dt)
-  test_m <- asinh(test_m / args$cofactor)
-  test_m <- t(test_m)
-  rownames(test_m) <- simple_markers
+    test_m <- as.matrix(test_dt)
+    test_m <- asinh(test_m / args$cofactor)
+    test_m <- t(test_m)
+    rownames(test_m) <- simple_markers
 
-  res <- GateMeClass_annotate(
-    exp_matrix = test_m,
-    marker_table = marker_table,
-    GMM_parameterization = args$GMM_parameterization,
-    reject_option = TRUE,
-    sampling = args$sampling,
-    k = k_to_use,
-    verbose = FALSE,
-    seed = args$seed
-  )
+    res <- GateMeClass_annotate(
+      exp_matrix = test_m,
+      marker_table = marker_table,
+      GMM_parameterization = args$GMM_parameterization,
+      reject_option = TRUE,
+      sampling = args$sampling,
+      k = k_to_use,
+      verbose = FALSE,
+      seed = args$seed
+    )
 
-  list(name = test_name, labels = res$labels)
+    list(ok = TRUE, name = test_name, labels = res$labels)
+  }, error = function(e) {
+    list(ok = FALSE, name = test_name, error = conditionMessage(e))
+  })
 }
 
 cores <- parallel::detectCores(logical = TRUE)
@@ -274,13 +278,16 @@ if (is.na(cores) || cores < 1) {
 }
 cores <- min(cores, 3)
 if (length(test_members) > 1 && cores > 1) {
-  results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores)
+  results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores, mc.preschedule = FALSE)
 } else {
   results <- lapply(seq_along(test_members), process_sample)
 }
 
 all_predictions <- list()
 for (res in results) {
+  if (is.null(res$ok) || !isTRUE(res$ok)) {
+    stop(sprintf("GateMeClass failed for sample '%s': %s", res$name, res$error))
+  }
   all_predictions[[res$name]] <- res$labels
 }
 
