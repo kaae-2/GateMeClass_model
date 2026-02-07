@@ -91,8 +91,8 @@ parser$add_argument("--k", type = "integer", default = 20,
                     help = "k parameter for KNN refinement")
 parser$add_argument("--cofactor", type = "double", default = 5,
                     help = "Cofactor for arcsinh transformation")
-parser$add_argument("--sampling_imp_vars", type = "double", default = NA,
-                    help = "Fraction of training cells for variable-importance step (defaults to --sampling / 10)")
+parser$add_argument("--sampling_imp_vars", type = "double", default = -1,
+                    help = "Fraction of training cells for variable-importance step (<=0 defaults to --sampling / 10)")
 
 args <- parser$parse_args()
 set.seed(args$seed)
@@ -245,7 +245,7 @@ rownames(train_m) <- simple_markers
 message("GateMeClass: running predictions")
 k_to_use <- if (is.null(args$k) || args$k <= 0) 20 else args$k
 sampling_imp_vars_to_use <- args$sampling_imp_vars
-if (is.na(sampling_imp_vars_to_use)) {
+if (is.na(sampling_imp_vars_to_use) || sampling_imp_vars_to_use <= 0) {
   sampling_imp_vars_to_use <- args$sampling / 10
 }
 sampling_imp_vars_to_use <- max(min(sampling_imp_vars_to_use, 1), 1e-06)
