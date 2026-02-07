@@ -25,6 +25,7 @@ if (all(Sys.getenv(thread_envs) == "")) {
   if (is.na(cores) || cores < 1) {
     cores <- 1
   }
+  cores <- min(cores, 4)
   Sys.setenv(
     OMP_NUM_THREADS = cores,
     OPENBLAS_NUM_THREADS = cores,
@@ -271,6 +272,7 @@ cores <- parallel::detectCores(logical = TRUE)
 if (is.na(cores) || cores < 1) {
   cores <- 1
 }
+cores <- min(cores, 4)
 if (length(test_members) > 1 && cores > 1) {
   results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores)
 } else {
