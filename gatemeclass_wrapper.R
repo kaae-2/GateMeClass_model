@@ -234,9 +234,7 @@ marker_table <- GateMeClass_train(
 test_extract_dir <- file.path(tmp_root, "test_samples")
 dir.create(test_extract_dir, showWarnings = FALSE, recursive = TRUE)
 
-all_predictions <- list()
-
-for (idx in seq_along(test_members)) {
+process_sample <- function(idx) {
   test_member <- test_members[[idx]]
   test_name <- test_sample_names[[idx]]
 
@@ -266,7 +264,22 @@ for (idx in seq_along(test_members)) {
     seed = args$seed
   )
 
-  all_predictions[[test_name]] <- res$labels
+  list(name = test_name, labels = res$labels)
+}
+
+cores <- parallel::detectCores(logical = TRUE)
+if (is.na(cores) || cores < 1) {
+  cores <- 1
+}
+if (length(test_members) > 1 && cores > 1) {
+  results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores)
+} else {
+  results <- lapply(seq_along(test_members), process_sample)
+}
+
+all_predictions <- list()
+for (res in results) {
+  all_predictions[[res$name]] <- res$labels
 }
 
 message("GateMeClass: writing archive")
