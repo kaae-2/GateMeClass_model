@@ -208,6 +208,15 @@ rownames(train_m) <- simple_markers
 message("GateMeClass: running predictions")
 k_to_use <- if (is.null(args$k) || args$k <= 0) 20 else args$k
 
+message("GateMeClass: training marker table")
+marker_table <- GateMeClass_train(
+  reference = train_m,
+  labels = train_labels,
+  GMM_parameterization = args$GMM_parameterization,
+  seed = args$seed,
+  verbose = FALSE
+)
+
 test_extract_dir <- file.path(tmp_root, "test_samples")
 dir.create(test_extract_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -234,11 +243,7 @@ for (idx in seq_along(test_members)) {
 
   res <- GateMeClass_annotate(
     exp_matrix = test_m,
-    marker_table = NULL,
-    train_parameters = list(
-      reference = train_m,
-      labels = train_labels
-    ),
+    marker_table = marker_table,
     GMM_parameterization = args$GMM_parameterization,
     reject_option = TRUE,
     sampling = args$sampling,
