@@ -338,12 +338,13 @@ for (idx in seq_along(test_sample_names)) {
 
   if (!is.null(label_to_id)) {
     pred_int <- label_to_id[pred_labels]
-    pred_int[is.na(pred_int)] <- NA
   } else {
     pred_int <- as.integer(gsub("^Type_", "", pred_labels))
   }
 
-  out_labels <- ifelse(is.na(pred_int), "", sprintf("%.1f", as.numeric(pred_int)))
+  pred_int[is.na(pred_int)] <- 0
+
+  out_labels <- sprintf("%.1f", as.numeric(pred_int))
 
   sample_number <- get_sample_number(test_name, idx)
   tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
