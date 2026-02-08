@@ -308,14 +308,26 @@ if (is.na(cores) || cores < 1) {
 cores <- min(cores, 3)
 if (length(test_members) > 1 && cores > 1) {
   results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores, mc.preschedule = FALSE)
+  missing_result_idx <- which(vapply(results, is.null, logical(1)))
+  if (length(missing_result_idx) > 0) {
+    message(sprintf(
+      "GateMeClass: %d parallel calls returned no result; retrying sequentially for failed samples",
+      length(missing_result_idx)
+    ))
+    for (idx in missing_result_idx) {
+      results[[idx]] <- process_sample(idx)
+    }
+  }
 } else {
   results <- lapply(seq_along(test_members), process_sample)
 }
 
 all_predictions <- list()
 for (res in results) {
-  if (is.null(res$ok) || !isTRUE(res$ok)) {
-    stop(sprintf("GateMeClass failed for sample '%s': %s", res$name, res$error))
+  if (is.null(res) || is.null(res$ok) || !isTRUE(res$ok)) {
+    sample_name <- if (!is.null(res) && !is.null(res$name)) res$name else "<unknown>"
+    err <- if (!is.null(res) && !is.null(res$error)) res$error else "parallel worker returned no result"
+    stop(sprintf("GateMeClass failed for sample '%s': %s", sample_name, err))
   }
   all_predictions[[res$name]] <- res$labels
 }
