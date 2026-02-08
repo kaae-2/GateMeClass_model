@@ -14,6 +14,17 @@ script_dir <- if (length(script_path) > 0) {
 } else {
   getwd()
 }
+
+max_cores_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_CORES", "3")))
+if (is.na(max_cores_env) || max_cores_env < 1) {
+  max_cores_env <- 3
+}
+
+blas_threads_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_BLAS_THREADS", "")))
+if (is.na(blas_threads_env) || blas_threads_env < 1) {
+  blas_threads_env <- if (max_cores_env > 1) 1 else max_cores_env
+}
+
 local_lib <- file.path(script_dir, ".r_libs")
 dir.create(local_lib, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(local_lib, .libPaths()))
@@ -21,16 +32,11 @@ Sys.setenv(R_LIBS_USER = local_lib)
 
 thread_envs <- c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
 if (all(Sys.getenv(thread_envs) == "")) {
-  cores <- parallel::detectCores(logical = TRUE)
-  if (is.na(cores) || cores < 1) {
-    cores <- 1
-  }
-  cores <- min(cores, 3)
   Sys.setenv(
-    OMP_NUM_THREADS = cores,
-    OPENBLAS_NUM_THREADS = cores,
-    MKL_NUM_THREADS = cores,
-    VECLIB_MAXIMUM_THREADS = cores
+    OMP_NUM_THREADS = blas_threads_env,
+    OPENBLAS_NUM_THREADS = blas_threads_env,
+    MKL_NUM_THREADS = blas_threads_env,
+    VECLIB_MAXIMUM_THREADS = blas_threads_env
   )
 }
 
@@ -123,19 +129,50 @@ clean_member_name <- function(file_name) {
 }
 
 sanitize_matrix_dt <- function(dt, sample_name) {
-  na_count <- sum(is.na(dt))
-  if (na_count > 0) {
-    message(sprintf("GateMeClass: replacing %d missing values with 0 in '%s'", na_count, sample_name))
-    dt[is.na(dt)] <- 0
+  if (!is.data.table(dt)) {
+    dt <- as.data.table(dt)
   }
 
-  m <- as.matrix(dt)
-  non_finite <- !is.finite(m)
-  non_finite_count <- sum(non_finite)
+  na_count <- 0L
+  non_finite_count <- 0L
+  coerced_na_count <- 0L
+
+  for (col in names(dt)) {
+    v <- dt[[col]]
+
+    if (!is.numeric(v)) {
+      v_num <- suppressWarnings(as.numeric(v))
+      coerced_na_count <- coerced_na_count + sum(is.na(v_num) & !is.na(v))
+      v <- v_num
+    }
+
+    col_na <- is.na(v)
+    if (any(col_na)) {
+      na_count <- na_count + sum(col_na)
+      v[col_na] <- 0
+    }
+
+    col_non_finite <- !is.finite(v)
+    if (any(col_non_finite)) {
+      non_finite_count <- non_finite_count + sum(col_non_finite)
+      v[col_non_finite] <- 0
+    }
+
+    data.table::set(dt, j = col, value = v)
+  }
+
+  if (coerced_na_count > 0) {
+    message(sprintf(
+      "GateMeClass: coerced %d non-numeric values to NA in '%s'",
+      coerced_na_count,
+      sample_name
+    ))
+  }
+  if (na_count > 0) {
+    message(sprintf("GateMeClass: replacing %d missing values with 0 in '%s'", na_count, sample_name))
+  }
   if (non_finite_count > 0) {
     message(sprintf("GateMeClass: replacing %d non-finite values with 0 in '%s'", non_finite_count, sample_name))
-    m[non_finite] <- 0
-    dt <- as.data.table(m)
   }
 
   dt
@@ -263,14 +300,45 @@ marker_table <- GateMeClass_train(
 test_extract_dir <- file.path(tmp_root, "test_samples")
 dir.create(test_extract_dir, showWarnings = FALSE, recursive = TRUE)
 
+message("GateMeClass: extracting test archive")
+untar(args$`data.test_matrix`, exdir = test_extract_dir, files = test_members)
+
+if (!is.null(label_key)) {
+  label_to_id <- setNames(as.integer(names(label_key)), unlist(label_key))
+} else {
+  label_to_id <- NULL
+}
+
+tmp_pred_dir <- file.path(tempdir(), paste0("predictions_", Sys.getpid()))
+unlink(tmp_pred_dir, recursive = TRUE)
+dir.create(tmp_pred_dir, showWarnings = FALSE, recursive = TRUE)
+
+write_prediction_file <- function(test_name, pred_labels, idx) {
+  if (!is.null(label_to_id)) {
+    pred_int <- label_to_id[pred_labels]
+  } else {
+    pred_int <- as.integer(gsub("^Type_", "", pred_labels))
+  }
+
+  pred_int[is.na(pred_int)] <- 0
+  out_labels <- sprintf("%.1f", as.numeric(pred_int))
+
+  sample_number <- get_sample_number(test_name, idx)
+  tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
+  writeLines(out_labels, tmp_file)
+  tmp_file
+}
+
 process_sample <- function(idx) {
   test_member <- test_members[[idx]]
   test_name <- test_sample_names[[idx]]
 
   tryCatch({
-    test_path <- extract_member(args$`data.test_matrix`, test_member, test_extract_dir)
+    test_path <- file.path(test_extract_dir, test_member)
+    if (!file.exists(test_path)) {
+      stop(sprintf("Missing extracted test member: %s", test_member))
+    }
     test_dt <- fread(test_path, header = FALSE)
-    unlink(test_path)
 
     ungated_labels <- rep(NA_character_, nrow(test_dt))
 
@@ -281,7 +349,8 @@ process_sample <- function(idx) {
         ncol(test_dt),
         n_markers
       ))
-      return(list(ok = TRUE, name = test_name, labels = ungated_labels))
+      out_file <- write_prediction_file(test_name, ungated_labels, idx)
+      return(list(ok = TRUE, name = test_name, file = out_file))
     }
     test_dt <- sanitize_matrix_dt(test_dt, test_name)
     setnames(test_dt, names(test_dt), simple_markers)
@@ -312,7 +381,8 @@ process_sample <- function(idx) {
         test_name,
         reason
       ))
-      return(list(ok = TRUE, name = test_name, labels = ungated_labels))
+      out_file <- write_prediction_file(test_name, ungated_labels, idx)
+      return(list(ok = TRUE, name = test_name, file = out_file))
     }
 
     pred_labels <- as.character(res$labels)
@@ -326,7 +396,10 @@ process_sample <- function(idx) {
       pred_labels <- ungated_labels
     }
 
-    list(ok = TRUE, name = test_name, labels = pred_labels)
+    out_file <- write_prediction_file(test_name, pred_labels, idx)
+
+    rm(test_dt, test_m, pred_labels)
+    list(ok = TRUE, name = test_name, file = out_file)
   }, error = function(e) {
     list(ok = FALSE, name = test_name, error = conditionMessage(e))
   })
@@ -336,7 +409,7 @@ cores <- parallel::detectCores(logical = TRUE)
 if (is.na(cores) || cores < 1) {
   cores <- 1
 }
-cores <- min(cores, 3)
+cores <- min(cores, max_cores_env)
 if (length(test_members) > 1 && cores > 1) {
   results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores, mc.preschedule = FALSE)
   missing_result_idx <- which(vapply(results, is.null, logical(1)))
@@ -353,46 +426,15 @@ if (length(test_members) > 1 && cores > 1) {
   results <- lapply(seq_along(test_members), process_sample)
 }
 
-all_predictions <- list()
 for (res in results) {
   if (is.null(res) || is.null(res$ok) || !isTRUE(res$ok)) {
     sample_name <- if (!is.null(res) && !is.null(res$name)) res$name else "<unknown>"
     err <- if (!is.null(res) && !is.null(res$error)) res$error else "parallel worker returned no result"
     stop(sprintf("GateMeClass failed for sample '%s': %s", sample_name, err))
   }
-  all_predictions[[res$name]] <- res$labels
 }
 
 message("GateMeClass: writing archive")
-
-if (!is.null(label_key)) {
-  label_to_id <- setNames(as.integer(names(label_key)), unlist(label_key))
-} else {
-  label_to_id <- NULL
-}
-
-tmp_pred_dir <- file.path(tempdir(), paste0("predictions_", Sys.getpid()))
-unlink(tmp_pred_dir, recursive = TRUE)
-dir.create(tmp_pred_dir, showWarnings = FALSE, recursive = TRUE)
-
-for (idx in seq_along(test_sample_names)) {
-  test_name <- test_sample_names[[idx]]
-  pred_labels <- all_predictions[[test_name]]
-
-  if (!is.null(label_to_id)) {
-    pred_int <- label_to_id[pred_labels]
-  } else {
-    pred_int <- as.integer(gsub("^Type_", "", pred_labels))
-  }
-
-  pred_int[is.na(pred_int)] <- 0
-
-  out_labels <- sprintf("%.1f", as.numeric(pred_int))
-
-  sample_number <- get_sample_number(test_name, idx)
-  tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
-  writeLines(out_labels, tmp_file)
-}
 
 pred_archive <- file.path(output_dir_abs, paste0(args$name, "_predicted_labels.tar.gz"))
 
