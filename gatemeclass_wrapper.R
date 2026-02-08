@@ -272,9 +272,16 @@ process_sample <- function(idx) {
     test_dt <- fread(test_path, header = FALSE)
     unlink(test_path)
 
+    ungated_labels <- rep(NA_character_, nrow(test_dt))
+
     if (ncol(test_dt) != n_markers) {
-      stop(sprintf("Test sample '%s' has %d markers, expected %d",
-                   test_name, ncol(test_dt), n_markers))
+      message(sprintf(
+        "GateMeClass: sample '%s' has %d markers (expected %d); outputting Ungated for all cells",
+        test_name,
+        ncol(test_dt),
+        n_markers
+      ))
+      return(list(ok = TRUE, name = test_name, labels = ungated_labels))
     }
     test_dt <- sanitize_matrix_dt(test_dt, test_name)
     setnames(test_dt, names(test_dt), simple_markers)
@@ -284,18 +291,42 @@ process_sample <- function(idx) {
     test_m <- t(test_m)
     rownames(test_m) <- simple_markers
 
-    res <- GateMeClass_annotate(
-      exp_matrix = test_m,
-      marker_table = marker_table,
-      GMM_parameterization = args$GMM_parameterization,
-      reject_option = TRUE,
-      sampling = args$sampling,
-      k = k_to_use,
-      verbose = FALSE,
-      seed = args$seed
+    res <- tryCatch(
+      GateMeClass_annotate(
+        exp_matrix = test_m,
+        marker_table = marker_table,
+        GMM_parameterization = args$GMM_parameterization,
+        reject_option = TRUE,
+        sampling = args$sampling,
+        k = k_to_use,
+        verbose = FALSE,
+        seed = args$seed
+      ),
+      error = function(e) e
     )
 
-    list(ok = TRUE, name = test_name, labels = res$labels)
+    if (inherits(res, "error") || is.null(res$labels)) {
+      reason <- if (inherits(res, "error")) conditionMessage(res) else "missing labels in annotation result"
+      message(sprintf(
+        "GateMeClass: annotation failed for sample '%s' (%s); outputting Ungated for all cells",
+        test_name,
+        reason
+      ))
+      return(list(ok = TRUE, name = test_name, labels = ungated_labels))
+    }
+
+    pred_labels <- as.character(res$labels)
+    if (length(pred_labels) != nrow(test_dt)) {
+      message(sprintf(
+        "GateMeClass: sample '%s' produced %d labels for %d cells; outputting Ungated for all cells",
+        test_name,
+        length(pred_labels),
+        nrow(test_dt)
+      ))
+      pred_labels <- ungated_labels
+    }
+
+    list(ok = TRUE, name = test_name, labels = pred_labels)
   }, error = function(e) {
     list(ok = FALSE, name = test_name, error = conditionMessage(e))
   })
