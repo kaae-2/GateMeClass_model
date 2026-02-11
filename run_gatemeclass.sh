@@ -27,6 +27,7 @@ for required_file in "$train_matrix" "$train_labels" "$test_matrix"; do
 done
 
 output_dir="${script_dir}/out/data/analysis/default/${model_name}"
+excluded_datasets="${GATEMECLASS_EXCLUDED_DATASETS:-}"
 
 cmd=(
   conda run --no-capture-output -n "${model_name}" Rscript "${script_dir}/gatemeclass_wrapper.R"
@@ -39,5 +40,9 @@ cmd=(
   --sampling "1.0"
   --k "20"
 )
+
+if [ -n "${excluded_datasets}" ]; then
+  cmd+=(--excluded-datasets "${excluded_datasets}")
+fi
 
 "${cmd[@]}"

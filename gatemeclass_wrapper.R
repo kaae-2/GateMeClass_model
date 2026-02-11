@@ -99,11 +99,33 @@ parser$add_argument("--cofactor", type = "double", default = 5,
                     help = "Cofactor for arcsinh transformation")
 parser$add_argument("--sampling_imp_vars", type = "double", default = -1,
                     help = "Fraction of training cells for variable-importance step (<=0 defaults to --sampling / 10)")
+parser$add_argument("--excluded-datasets", type = "character", default = "",
+                    help = "Comma-separated dataset names to skip (outputs all 0 labels)")
 
 args <- parser$parse_args()
 set.seed(args$seed)
 
 message("GateMeClass: starting")
+
+parse_excluded_datasets <- function(raw_value) {
+  if (is.null(raw_value)) {
+    return(character(0))
+  }
+
+  values <- unlist(strsplit(raw_value, ",", fixed = TRUE), use.names = FALSE)
+  values <- trimws(values)
+  values <- values[nzchar(values)]
+  unique(values)
+}
+
+excluded_datasets <- parse_excluded_datasets(args$`excluded_datasets`)
+skip_dataset <- args$name %in% excluded_datasets
+if (skip_dataset) {
+  message(sprintf(
+    "GateMeClass: dataset '%s' is excluded; skipping training/inference and writing ungated predictions",
+    args$name
+  ))
+}
 
 output_dir_abs <- normalizePath(args$output_dir, mustWork = FALSE)
 dir.create(output_dir_abs, recursive = TRUE, showWarnings = FALSE)
@@ -220,26 +242,6 @@ tmp_root <- file.path(tempdir(), paste0("gatemeclass_", Sys.getpid()))
 unlink(tmp_root, recursive = TRUE)
 dir.create(tmp_root, showWarnings = FALSE, recursive = TRUE)
 
-train_members <- list_csv_members(args$`data.train_matrix`)
-if (length(train_members) == 0) {
-  stop("No CSV files found in archive: ", args$`data.train_matrix`)
-}
-train_extract_dir <- file.path(tmp_root, "train_matrix")
-dir.create(train_extract_dir, showWarnings = FALSE, recursive = TRUE)
-train_matrix_path <- extract_member(args$`data.train_matrix`, train_members[[1]], train_extract_dir)
-train_dt <- fread(train_matrix_path, header = FALSE)
-train_dt <- sanitize_matrix_dt(train_dt, "train")
-
-label_members <- list_csv_members(args$`data.train_labels`)
-if (length(label_members) == 0) {
-  stop("No CSV files found in archive: ", args$`data.train_labels`)
-}
-train_labels_extract_dir <- file.path(tmp_root, "train_labels")
-dir.create(train_labels_extract_dir, showWarnings = FALSE, recursive = TRUE)
-train_labels_path <- extract_member(args$`data.train_labels`, label_members[[1]], train_labels_extract_dir)
-train_labels_dt <- fread(train_labels_path, header = FALSE)
-train_y <- train_labels_dt[[1]]
-
 test_members <- list_csv_members(args$`data.test_matrix`)
 if (length(test_members) == 0) {
   stop("No CSV files found in archive: ", args$`data.test_matrix`)
@@ -248,54 +250,80 @@ test_sample_names <- vapply(test_members, clean_member_name, character(1))
 
 label_key <- load_label_key(args$`data.label_key`)
 
-if (nrow(train_dt) != length(train_y)) {
-  stop(sprintf("Training rows (%d) != train labels (%d)", nrow(train_dt), length(train_y)))
-}
-
-message("GateMeClass: preparing training data")
-
-unlabeled_mask <- is.na(train_y) | train_y == 0 | train_y == -1
-if (sum(unlabeled_mask) > 0) {
-  train_dt <- train_dt[!unlabeled_mask, ]
-  train_y <- train_y[!unlabeled_mask]
-}
-
-if (!is.null(label_key)) {
-  train_labels <- sapply(train_y, function(y) {
-    key <- as.character(y)
-    if (key %in% names(label_key)) label_key[[key]] else paste0("Type_", y)
-  })
-} else {
-  train_labels <- paste0("Type_", train_y)
-}
-
-n_markers <- ncol(train_dt)
-simple_markers <- paste0("M", seq_len(n_markers))
-setnames(train_dt, names(train_dt), simple_markers)
-
-message("GateMeClass: transforming data")
-train_m <- as.matrix(train_dt)
-train_m <- asinh(train_m / args$cofactor)
-train_m <- t(train_m)
-rownames(train_m) <- simple_markers
-
-message("GateMeClass: running predictions")
+n_markers <- NULL
+simple_markers <- NULL
 k_to_use <- if (is.null(args$k) || args$k <= 0) 20 else args$k
-sampling_imp_vars_to_use <- args$sampling_imp_vars
-if (is.na(sampling_imp_vars_to_use) || sampling_imp_vars_to_use <= 0) {
-  sampling_imp_vars_to_use <- args$sampling / 10
-}
-sampling_imp_vars_to_use <- max(min(sampling_imp_vars_to_use, 1), 1e-06)
+marker_table <- NULL
 
-message("GateMeClass: training marker table")
-marker_table <- GateMeClass_train(
-  reference = train_m,
-  labels = train_labels,
-  GMM_parameterization = args$GMM_parameterization,
-  sampling_imp_vars = sampling_imp_vars_to_use,
-  seed = args$seed,
-  verbose = FALSE
-)
+if (!skip_dataset) {
+  train_members <- list_csv_members(args$`data.train_matrix`)
+  if (length(train_members) == 0) {
+    stop("No CSV files found in archive: ", args$`data.train_matrix`)
+  }
+  train_extract_dir <- file.path(tmp_root, "train_matrix")
+  dir.create(train_extract_dir, showWarnings = FALSE, recursive = TRUE)
+  train_matrix_path <- extract_member(args$`data.train_matrix`, train_members[[1]], train_extract_dir)
+  train_dt <- fread(train_matrix_path, header = FALSE)
+  train_dt <- sanitize_matrix_dt(train_dt, "train")
+
+  label_members <- list_csv_members(args$`data.train_labels`)
+  if (length(label_members) == 0) {
+    stop("No CSV files found in archive: ", args$`data.train_labels`)
+  }
+  train_labels_extract_dir <- file.path(tmp_root, "train_labels")
+  dir.create(train_labels_extract_dir, showWarnings = FALSE, recursive = TRUE)
+  train_labels_path <- extract_member(args$`data.train_labels`, label_members[[1]], train_labels_extract_dir)
+  train_labels_dt <- fread(train_labels_path, header = FALSE)
+  train_y <- train_labels_dt[[1]]
+
+  if (nrow(train_dt) != length(train_y)) {
+    stop(sprintf("Training rows (%d) != train labels (%d)", nrow(train_dt), length(train_y)))
+  }
+
+  message("GateMeClass: preparing training data")
+
+  unlabeled_mask <- is.na(train_y) | train_y == 0 | train_y == -1
+  if (sum(unlabeled_mask) > 0) {
+    train_dt <- train_dt[!unlabeled_mask, ]
+    train_y <- train_y[!unlabeled_mask]
+  }
+
+  if (!is.null(label_key)) {
+    train_labels <- sapply(train_y, function(y) {
+      key <- as.character(y)
+      if (key %in% names(label_key)) label_key[[key]] else paste0("Type_", y)
+    })
+  } else {
+    train_labels <- paste0("Type_", train_y)
+  }
+
+  n_markers <- ncol(train_dt)
+  simple_markers <- paste0("M", seq_len(n_markers))
+  setnames(train_dt, names(train_dt), simple_markers)
+
+  message("GateMeClass: transforming data")
+  train_m <- as.matrix(train_dt)
+  train_m <- asinh(train_m / args$cofactor)
+  train_m <- t(train_m)
+  rownames(train_m) <- simple_markers
+
+  message("GateMeClass: running predictions")
+  sampling_imp_vars_to_use <- args$sampling_imp_vars
+  if (is.na(sampling_imp_vars_to_use) || sampling_imp_vars_to_use <= 0) {
+    sampling_imp_vars_to_use <- args$sampling / 10
+  }
+  sampling_imp_vars_to_use <- max(min(sampling_imp_vars_to_use, 1), 1e-06)
+
+  message("GateMeClass: training marker table")
+  marker_table <- GateMeClass_train(
+    reference = train_m,
+    labels = train_labels,
+    GMM_parameterization = args$GMM_parameterization,
+    sampling_imp_vars = sampling_imp_vars_to_use,
+    seed = args$seed,
+    verbose = FALSE
+  )
+}
 
 test_extract_dir <- file.path(tmp_root, "test_samples")
 dir.create(test_extract_dir, showWarnings = FALSE, recursive = TRUE)
@@ -321,7 +349,7 @@ write_prediction_file <- function(test_name, pred_labels, idx) {
   }
 
   pred_int[is.na(pred_int)] <- 0
-  out_labels <- sprintf("%.1f", as.numeric(pred_int))
+  out_labels <- as.character(as.integer(pred_int))
 
   sample_number <- get_sample_number(test_name, idx)
   tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
@@ -339,6 +367,12 @@ process_sample <- function(idx) {
       stop(sprintf("Missing extracted test member: %s", test_member))
     }
     test_dt <- fread(test_path, header = FALSE)
+
+    if (skip_dataset) {
+      skipped_labels <- rep("0", nrow(test_dt))
+      out_file <- write_prediction_file(test_name, skipped_labels, idx)
+      return(list(ok = TRUE, name = test_name, file = out_file))
+    }
 
     ungated_labels <- rep(NA_character_, nrow(test_dt))
 
