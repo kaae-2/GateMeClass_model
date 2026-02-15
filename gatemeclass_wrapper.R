@@ -118,12 +118,75 @@ parse_excluded_datasets <- function(raw_value) {
   unique(values)
 }
 
+extract_dataset_hash <- function(path_value) {
+  if (is.null(path_value) || !nzchar(path_value)) {
+    return(NULL)
+  }
+
+  pattern <- "data_import/\\.([0-9a-f]{64})/"
+  m <- regexec(pattern, path_value, perl = TRUE)
+  parts <- regmatches(path_value, m)[[1]]
+  if (length(parts) >= 2) {
+    return(parts[[2]])
+  }
+
+  NULL
+}
+
+resolve_dataset_name_from_hash <- function(dataset_hash) {
+  if (is.null(dataset_hash) || !nzchar(dataset_hash)) {
+    return(NULL)
+  }
+
+  topology_path <- file.path(script_dir, "..", "..", "benchmark", "Clustering_conda.topology.mmd")
+  topology_path <- normalizePath(topology_path, mustWork = FALSE)
+  if (!file.exists(topology_path)) {
+    return(NULL)
+  }
+
+  lines <- readLines(topology_path, warn = FALSE)
+  line_pattern <- paste0("^[[:space:]]*", dataset_hash, "\\['--dataset_name', '([^']+)'")
+  idx <- grep(line_pattern, lines, perl = TRUE)
+  if (length(idx) == 0) {
+    return(NULL)
+  }
+
+  reg <- regexec("--dataset_name', '([^']+)'", lines[[idx[[1]]]], perl = TRUE)
+  parts <- regmatches(lines[[idx[[1]]]], reg)[[1]]
+  if (length(parts) >= 2) {
+    return(parts[[2]])
+  }
+
+  NULL
+}
+
+resolve_dataset_identifier <- function(default_name, test_matrix_path) {
+  dataset_hash <- extract_dataset_hash(test_matrix_path)
+  dataset_name <- resolve_dataset_name_from_hash(dataset_hash)
+
+  list(
+    dataset_id = default_name,
+    dataset_hash = dataset_hash,
+    dataset_name = dataset_name
+  )
+}
+
 excluded_datasets <- parse_excluded_datasets(args$`excluded_datasets`)
-skip_dataset <- args$name %in% excluded_datasets
+dataset_identity <- resolve_dataset_identifier(args$name, args$`data.test_matrix`)
+candidate_names <- unique(c(
+  dataset_identity$dataset_id,
+  dataset_identity$dataset_name,
+  dataset_identity$dataset_hash
+))
+candidate_names <- candidate_names[!is.na(candidate_names) & nzchar(candidate_names)]
+
+matched_identifier <- intersect(candidate_names, excluded_datasets)
+skip_dataset <- length(matched_identifier) > 0
 if (skip_dataset) {
   message(sprintf(
-    "GateMeClass: dataset '%s' is excluded; skipping training/inference and writing ungated predictions",
-    args$name
+    "GateMeClass: dataset '%s' is excluded via '%s'; skipping training/inference and writing ungated predictions",
+    args$name,
+    matched_identifier[[1]]
   ))
 }
 
