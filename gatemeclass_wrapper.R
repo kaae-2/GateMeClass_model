@@ -15,9 +15,9 @@ script_dir <- if (length(script_path) > 0) {
   getwd()
 }
 
-max_cores_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_CORES", "3")))
+max_cores_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_CORES", "1")))
 if (is.na(max_cores_env) || max_cores_env < 1) {
-  max_cores_env <- 3
+  max_cores_env <- 1
 }
 
 blas_threads_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_BLAS_THREADS", "")))
@@ -30,15 +30,12 @@ dir.create(local_lib, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(local_lib, .libPaths()))
 Sys.setenv(R_LIBS_USER = local_lib)
 
-thread_envs <- c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
-if (all(Sys.getenv(thread_envs) == "")) {
-  Sys.setenv(
-    OMP_NUM_THREADS = blas_threads_env,
-    OPENBLAS_NUM_THREADS = blas_threads_env,
-    MKL_NUM_THREADS = blas_threads_env,
-    VECLIB_MAXIMUM_THREADS = blas_threads_env
-  )
-}
+Sys.setenv(
+  OMP_NUM_THREADS = blas_threads_env,
+  OPENBLAS_NUM_THREADS = blas_threads_env,
+  MKL_NUM_THREADS = blas_threads_env,
+  VECLIB_MAXIMUM_THREADS = blas_threads_env
+)
 
 suppressPackageStartupMessages({
   library(argparse)
@@ -51,6 +48,12 @@ suppressPackageStartupMessages({
   library(batchelor)
   library(plyr)
 })
+
+data.table::setDTthreads(threads = blas_threads_env)
+if (requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+  RhpcBLASctl::blas_set_num_threads(blas_threads_env)
+  RhpcBLASctl::omp_set_num_threads(blas_threads_env)
+}
 
 gate_source <- file.path(script_dir, "gatemeclass_model", "R", "GateMeClass.R")
 if (file.exists(gate_source)) {
@@ -133,6 +136,52 @@ extract_dataset_hash <- function(path_value) {
   NULL
 }
 
+extract_dataset_root <- function(path_value) {
+  if (is.null(path_value) || !nzchar(path_value)) {
+    return(NULL)
+  }
+
+  pattern <- "^(.*?/data_import/\\.[0-9a-f]{64})/"
+  m <- regexec(pattern, path_value, perl = TRUE)
+  parts <- regmatches(path_value, m)[[1]]
+  if (length(parts) >= 2) {
+    return(parts[[2]])
+  }
+
+  NULL
+}
+
+resolve_dataset_name_from_label_key_metadata <- function(label_key_path) {
+  if (is.null(label_key_path) || !nzchar(label_key_path) || !file.exists(label_key_path)) {
+    return(NULL)
+  }
+
+  payload <- tryCatch({
+    if (grepl("\\.gz$", label_key_path)) {
+      con <- gzfile(label_key_path, "rt")
+      on.exit(close(con), add = TRUE)
+      jsonlite::fromJSON(paste(readLines(con, warn = FALSE), collapse = ""))
+    } else {
+      jsonlite::fromJSON(label_key_path)
+    }
+  }, error = function(e) NULL)
+
+  if (is.null(payload) || !"metadata" %in% names(payload)) {
+    return(NULL)
+  }
+
+  if (!"dataset_name" %in% names(payload$metadata)) {
+    return(NULL)
+  }
+
+  dataset_name <- as.character(payload$metadata[["dataset_name"]])
+  if (!nzchar(dataset_name)) {
+    return(NULL)
+  }
+
+  dataset_name
+}
+
 resolve_dataset_name_from_hash <- function(dataset_hash) {
   if (is.null(dataset_hash) || !nzchar(dataset_hash)) {
     return(NULL)
@@ -162,7 +211,10 @@ resolve_dataset_name_from_hash <- function(dataset_hash) {
 
 resolve_dataset_identifier <- function(default_name, test_matrix_path) {
   dataset_hash <- extract_dataset_hash(test_matrix_path)
-  dataset_name <- resolve_dataset_name_from_hash(dataset_hash)
+  dataset_name <- resolve_dataset_name_from_label_key_metadata(args$`data.label_key`)
+  if (is.null(dataset_name) || !nzchar(dataset_name)) {
+    dataset_name <- resolve_dataset_name_from_hash(dataset_hash)
+  }
 
   list(
     dataset_id = default_name,
@@ -172,14 +224,11 @@ resolve_dataset_identifier <- function(default_name, test_matrix_path) {
 }
 
 resolve_cells_per_sample <- function(test_matrix_path, dataset_id) {
-  pattern <- "^(.*?/data_import/\\.[0-9a-f]{64})/preprocessing/"
-  m <- regexec(pattern, test_matrix_path, perl = TRUE)
-  parts <- regmatches(test_matrix_path, m)[[1]]
-  if (length(parts) < 2) {
+  dataset_root <- extract_dataset_root(test_matrix_path)
+  if (is.null(dataset_root)) {
     return(NULL)
   }
 
-  dataset_root <- parts[[2]]
   order_path <- file.path(dataset_root, paste0(dataset_id, ".order.json.gz"))
   if (!file.exists(order_path)) {
     return(NULL)
