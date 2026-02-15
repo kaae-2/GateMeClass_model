@@ -171,6 +171,31 @@ resolve_dataset_identifier <- function(default_name, test_matrix_path) {
   )
 }
 
+resolve_cells_per_sample <- function(test_matrix_path, dataset_id) {
+  pattern <- "^(.*?/data_import/\\.[0-9a-f]{64})/preprocessing/"
+  m <- regexec(pattern, test_matrix_path, perl = TRUE)
+  parts <- regmatches(test_matrix_path, m)[[1]]
+  if (length(parts) < 2) {
+    return(NULL)
+  }
+
+  dataset_root <- parts[[2]]
+  order_path <- file.path(dataset_root, paste0(dataset_id, ".order.json.gz"))
+  if (!file.exists(order_path)) {
+    return(NULL)
+  }
+
+  con <- gzfile(order_path, "rt")
+  on.exit(close(con), add = TRUE)
+  payload <- jsonlite::fromJSON(paste(readLines(con, warn = FALSE), collapse = ""))
+
+  if (!"metadata" %in% names(payload) || !"cells_per_sample" %in% names(payload$metadata)) {
+    return(NULL)
+  }
+
+  as.integer(payload$metadata$cells_per_sample)
+}
+
 excluded_datasets <- parse_excluded_datasets(args$`excluded_datasets`)
 dataset_identity <- resolve_dataset_identifier(args$name, args$`data.test_matrix`)
 candidate_names <- unique(c(
@@ -311,6 +336,57 @@ if (length(test_members) == 0) {
 }
 test_sample_names <- vapply(test_members, clean_member_name, character(1))
 
+tmp_pred_dir <- file.path(tempdir(), paste0("predictions_", Sys.getpid()))
+unlink(tmp_pred_dir, recursive = TRUE)
+dir.create(tmp_pred_dir, showWarnings = FALSE, recursive = TRUE)
+
+write_prediction_archive <- function() {
+  pred_archive <- file.path(output_dir_abs, paste0(args$name, "_predicted_labels.tar.gz"))
+
+  if (file.exists(pred_archive)) {
+    file.remove(pred_archive)
+  }
+
+  old_wd <- getwd()
+  setwd(tmp_pred_dir)
+  files_to_tar <- sort(list.files(".", pattern = "\\.csv$"))
+  tar(pred_archive, files = files_to_tar, compression = "gzip")
+  setwd(old_wd)
+
+  if (!file.exists(pred_archive)) {
+    stop("Failed to create predictions archive!")
+  }
+
+  pred_archive
+}
+
+if (skip_dataset) {
+  message("GateMeClass: excluded dataset, writing zero prediction vectors")
+  cells_per_sample <- resolve_cells_per_sample(args$`data.test_matrix`, args$name)
+  if (is.null(cells_per_sample)) {
+    stop("Could not resolve cells_per_sample metadata for excluded dataset.")
+  }
+
+  for (idx in seq_along(test_sample_names)) {
+    sample_idx <- suppressWarnings(as.integer(get_sample_number(test_members[[idx]], idx)))
+    if (is.na(sample_idx) || sample_idx < 1 || sample_idx > length(cells_per_sample)) {
+      stop(sprintf("Invalid sample index '%s' for excluded dataset output.", sample_idx))
+    }
+    row_count <- cells_per_sample[[sample_idx]]
+
+    sample_number <- get_sample_number(test_sample_names[[idx]], idx)
+    tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
+    writeLines(rep("0", row_count), tmp_file)
+  }
+
+  message("GateMeClass: writing archive")
+  write_prediction_archive()
+  unlink(tmp_pred_dir, recursive = TRUE)
+  unlink(tmp_root, recursive = TRUE)
+  message("GateMeClass: done")
+  quit(status = 0)
+}
+
 label_key <- load_label_key(args$`data.label_key`)
 
 n_markers <- NULL
@@ -400,10 +476,6 @@ if (!is.null(label_key)) {
   label_to_id <- NULL
 }
 
-tmp_pred_dir <- file.path(tempdir(), paste0("predictions_", Sys.getpid()))
-unlink(tmp_pred_dir, recursive = TRUE)
-dir.create(tmp_pred_dir, showWarnings = FALSE, recursive = TRUE)
-
 write_prediction_file <- function(test_name, pred_labels, idx) {
   if (!is.null(label_to_id)) {
     pred_int <- label_to_id[pred_labels]
@@ -430,12 +502,6 @@ process_sample <- function(idx) {
       stop(sprintf("Missing extracted test member: %s", test_member))
     }
     test_dt <- fread(test_path, header = FALSE)
-
-    if (skip_dataset) {
-      skipped_labels <- rep("0", nrow(test_dt))
-      out_file <- write_prediction_file(test_name, skipped_labels, idx)
-      return(list(ok = TRUE, name = test_name, file = out_file))
-    }
 
     ungated_labels <- rep(NA_character_, nrow(test_dt))
 
@@ -532,24 +598,9 @@ for (res in results) {
 }
 
 message("GateMeClass: writing archive")
-
-pred_archive <- file.path(output_dir_abs, paste0(args$name, "_predicted_labels.tar.gz"))
-
-if (file.exists(pred_archive)) {
-  file.remove(pred_archive)
-}
-
-old_wd <- getwd()
-setwd(tmp_pred_dir)
-files_to_tar <- sort(list.files(".", pattern = "\\.csv$"))
-tar(pred_archive, files = files_to_tar, compression = "gzip")
-setwd(old_wd)
+write_prediction_archive()
 
 unlink(tmp_pred_dir, recursive = TRUE)
 unlink(tmp_root, recursive = TRUE)
-
-if (!file.exists(pred_archive)) {
-  stop("Failed to create predictions archive!")
-}
 
 message("GateMeClass: done")
