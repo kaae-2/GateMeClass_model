@@ -87,8 +87,8 @@ parser$add_argument("--data.train_labels", type = "character", required = TRUE,
                     help = "tar.gz archive containing training labels CSV")
 parser$add_argument("--data.test_matrix", type = "character", required = TRUE,
                     help = "tar.gz archive containing test matrix CSVs")
-parser$add_argument("--data.label_key", type = "character", required = FALSE, default = NULL,
-                    help = "Optional: JSON.gz with id_to_label mapping")
+parser$add_argument("--data.label_key", type = "character", required = TRUE,
+                    help = "JSON.gz with id_to_label mapping and metadata.dataset_name")
 parser$add_argument("--seed", type = "integer", default = 42)
 parser$add_argument("--output_dir", "-o", type = "character", default = getwd())
 parser$add_argument("--name", "-n", type = "character", required = TRUE)
@@ -152,8 +152,11 @@ extract_dataset_root <- function(path_value) {
 }
 
 resolve_dataset_name_from_label_key_metadata <- function(label_key_path) {
-  if (is.null(label_key_path) || !nzchar(label_key_path) || !file.exists(label_key_path)) {
-    return(NULL)
+  if (is.null(label_key_path) || !nzchar(label_key_path)) {
+    stop("--data.label_key is required and must point to a readable JSON(.gz) file.")
+  }
+  if (!file.exists(label_key_path)) {
+    stop("--data.label_key does not exist: ", label_key_path)
   }
 
   payload <- tryCatch({
@@ -164,57 +167,29 @@ resolve_dataset_name_from_label_key_metadata <- function(label_key_path) {
     } else {
       jsonlite::fromJSON(label_key_path)
     }
-  }, error = function(e) NULL)
+  }, error = function(e) {
+    stop("Failed to read --data.label_key metadata from '", label_key_path, "': ", conditionMessage(e))
+  })
 
   if (is.null(payload) || !"metadata" %in% names(payload)) {
-    return(NULL)
+    stop("--data.label_key must include a top-level 'metadata' object.")
   }
 
   if (!"dataset_name" %in% names(payload$metadata)) {
-    return(NULL)
+    stop("--data.label_key metadata must include 'dataset_name'.")
   }
 
   dataset_name <- as.character(payload$metadata[["dataset_name"]])
   if (!nzchar(dataset_name)) {
-    return(NULL)
+    stop("--data.label_key metadata.dataset_name is empty.")
   }
 
   dataset_name
 }
 
-resolve_dataset_name_from_hash <- function(dataset_hash) {
-  if (is.null(dataset_hash) || !nzchar(dataset_hash)) {
-    return(NULL)
-  }
-
-  topology_path <- file.path(script_dir, "..", "..", "benchmark", "Clustering_conda.topology.mmd")
-  topology_path <- normalizePath(topology_path, mustWork = FALSE)
-  if (!file.exists(topology_path)) {
-    return(NULL)
-  }
-
-  lines <- readLines(topology_path, warn = FALSE)
-  line_pattern <- paste0("^[[:space:]]*", dataset_hash, "\\['--dataset_name', '([^']+)'")
-  idx <- grep(line_pattern, lines, perl = TRUE)
-  if (length(idx) == 0) {
-    return(NULL)
-  }
-
-  reg <- regexec("--dataset_name', '([^']+)'", lines[[idx[[1]]]], perl = TRUE)
-  parts <- regmatches(lines[[idx[[1]]]], reg)[[1]]
-  if (length(parts) >= 2) {
-    return(parts[[2]])
-  }
-
-  NULL
-}
-
 resolve_dataset_identifier <- function(default_name, test_matrix_path) {
   dataset_hash <- extract_dataset_hash(test_matrix_path)
   dataset_name <- resolve_dataset_name_from_label_key_metadata(args$`data.label_key`)
-  if (is.null(dataset_name) || !nzchar(dataset_name)) {
-    dataset_name <- resolve_dataset_name_from_hash(dataset_hash)
-  }
 
   list(
     dataset_id = default_name,
