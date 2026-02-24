@@ -552,7 +552,7 @@ process_sample <- function(idx) {
         exp_matrix = test_m,
         marker_table = marker_table,
         GMM_parameterization = args$GMM_parameterization,
-        reject_option = TRUE,
+        reject_option = FALSE,
         sampling = args$sampling,
         k = k_to_use,
         verbose = FALSE,
