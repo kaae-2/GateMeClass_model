@@ -8,8 +8,8 @@ Runs the GateMeClass R wrapper for cell-type annotation.
 - Local runner: `run_gatemeclass.sh`
 - Output: `gatemeclass_predicted_labels.tar.gz`
 
-The wrapper reads train/test tar archives, applies marker transformation,
-predicts labels per sample, and maps labels back to benchmark ids.
+The wrapper reads train/test tar archives, predicts labels per sample,
+and maps labels back to benchmark ids.
 
 ## Run locally
 

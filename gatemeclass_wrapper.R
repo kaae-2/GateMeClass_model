@@ -98,8 +98,6 @@ parser$add_argument("--sampling", type = "double", default = 0.1,
                     help = "Fraction of cells to use (0.0-1.0)")
 parser$add_argument("--k", type = "integer", default = 20,
                     help = "k parameter for KNN refinement")
-parser$add_argument("--cofactor", type = "double", default = 5,
-                    help = "Cofactor for arcsinh transformation")
 parser$add_argument("--sampling_imp_vars", type = "double", default = -1,
                     help = "Fraction of training cells for variable-importance step (<=0 defaults to --sampling / 10)")
 parser$add_argument("--excluded-datasets", type = "character", default = "",
@@ -464,9 +462,7 @@ if (!skip_dataset) {
   simple_markers <- paste0("M", seq_len(n_markers))
   setnames(train_dt, names(train_dt), simple_markers)
 
-  message("GateMeClass: transforming data")
   train_m <- as.matrix(train_dt)
-  train_m <- asinh(train_m / args$cofactor)
   train_m <- t(train_m)
   rownames(train_m) <- simple_markers
 
@@ -543,7 +539,6 @@ process_sample <- function(idx) {
     setnames(test_dt, names(test_dt), simple_markers)
 
     test_m <- as.matrix(test_dt)
-    test_m <- asinh(test_m / args$cofactor)
     test_m <- t(test_m)
     rownames(test_m) <- simple_markers
 
