@@ -23,6 +23,21 @@ Optional exclusion list:
 GATEMECLASS_EXCLUDED_DATASETS=FR-FCM-Z3YR,flowcyt bash models/gatemeclass/run_gatemeclass.sh
 ```
 
+The local runner now matches the benchmark defaults more closely:
+
+- `GATEMECLASS_SAMPLING=0.1`
+- `GATEMECLASS_K=20`
+- `GATEMECLASS_CORES=1`
+- `GATEMECLASS_BLAS_THREADS=1`
+
+Those conservative defaults are deliberate. GateMeClass can spike RSS when it
+annotates multiple samples in parallel, so raising worker count should be
+treated as a memory tradeoff rather than a free speedup.
+
+Dataset exclusions are resolved from the passed label-key/order metadata first,
+then from path fallbacks. Matching is case-insensitive and ignores separators,
+so `FlowCyt`, `flowcyt`, and `flow-cyt` all match the same exclusion entry.
+
 ## Run as part of benchmark
 
 Configured in `benchmark/Clustering_conda.yml` analysis stage; run with:

@@ -18,8 +18,9 @@ fi
 train_matrix="${script_dir}/out/data/data_preprocessing/default/data_import.train.matrix.tar.gz"
 train_labels="${script_dir}/out/data/data_preprocessing/default/data_import.train.labels.tar.gz"
 test_matrix="${script_dir}/out/data/data_preprocessing/default/data_import.test.matrices.tar.gz"
+label_key="${script_dir}/out/data/data_preprocessing/default/data_import.label_key.json.gz"
 
-for required_file in "$train_matrix" "$train_labels" "$test_matrix"; do
+for required_file in "$train_matrix" "$train_labels" "$test_matrix" "$label_key"; do
   if [ ! -f "$required_file" ]; then
     echo "ERROR: missing input file: ${required_file}" >&2
     exit 1
@@ -28,6 +29,9 @@ done
 
 output_dir="${script_dir}/out/data/analysis/default/${model_name}"
 excluded_datasets="${GATEMECLASS_EXCLUDED_DATASETS:-}"
+gmm_parameterization="${GATEMECLASS_GMM_PARAMETERIZATION:-V}"
+sampling="${GATEMECLASS_SAMPLING:-0.1}"
+k_value="${GATEMECLASS_K:-20}"
 
 cmd=(
   conda run --no-capture-output -n "${model_name}" Rscript "${script_dir}/gatemeclass_wrapper.R"
@@ -36,9 +40,10 @@ cmd=(
   --data.train_matrix "${train_matrix}"
   --data.train_labels "${train_labels}"
   --data.test_matrix "${test_matrix}"
-  --GMM_parameterization "V"
-  --sampling "1.0"
-  --k "20"
+  --data.label_key "${label_key}"
+  --GMM_parameterization "${gmm_parameterization}"
+  --sampling "${sampling}"
+  --k "${k_value}"
 )
 
 if [ -n "${excluded_datasets}" ]; then

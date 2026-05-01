@@ -108,6 +108,22 @@ set.seed(args$seed)
 
 message("GateMeClass: starting")
 
+normalize_dataset_token <- function(value) {
+  if (is.null(value)) {
+    return(character(0))
+  }
+
+  value <- trimws(as.character(value))
+  value <- value[nzchar(value)]
+  if (!length(value)) {
+    return(character(0))
+  }
+
+  normalized <- tolower(value)
+  normalized <- gsub("[^a-z0-9]+", "", normalized, perl = TRUE)
+  normalized[nzchar(normalized)]
+}
+
 parse_excluded_datasets <- function(raw_value) {
   if (is.null(raw_value)) {
     return(character(0))
@@ -185,6 +201,32 @@ resolve_dataset_name_from_label_key_metadata <- function(label_key_path) {
   dataset_name
 }
 
+resolve_order_path <- function(label_key_path, test_matrix_path, dataset_id) {
+  candidates <- character(0)
+
+  if (!is.null(label_key_path) && nzchar(label_key_path)) {
+    candidates <- c(
+      candidates,
+      sub("\\.label_key\\.json\\.gz$", ".order.json.gz", label_key_path),
+      sub("\\.label_key\\.json$", ".order.json", label_key_path)
+    )
+  }
+
+  dataset_root <- extract_dataset_root(test_matrix_path)
+  if (!is.null(dataset_root) && nzchar(dataset_id)) {
+    candidates <- c(candidates, file.path(dataset_root, paste0(dataset_id, ".order.json.gz")))
+  }
+
+  candidates <- unique(candidates[nzchar(candidates)])
+  for (candidate in candidates) {
+    if (file.exists(candidate)) {
+      return(candidate)
+    }
+  }
+
+  NULL
+}
+
 resolve_dataset_identifier <- function(default_name, test_matrix_path) {
   dataset_hash <- extract_dataset_hash(test_matrix_path)
   dataset_name <- resolve_dataset_name_from_label_key_metadata(args$`data.label_key`)
@@ -196,14 +238,8 @@ resolve_dataset_identifier <- function(default_name, test_matrix_path) {
   )
 }
 
-resolve_cells_per_sample <- function(test_matrix_path, dataset_id) {
-  dataset_root <- extract_dataset_root(test_matrix_path)
-  if (is.null(dataset_root)) {
-    return(NULL)
-  }
-
-  order_path <- file.path(dataset_root, paste0(dataset_id, ".order.json.gz"))
-  if (!file.exists(order_path)) {
+resolve_cells_per_sample <- function(order_path) {
+  if (is.null(order_path) || !file.exists(order_path)) {
     return(NULL)
   }
 
@@ -220,6 +256,7 @@ resolve_cells_per_sample <- function(test_matrix_path, dataset_id) {
 
 excluded_datasets <- parse_excluded_datasets(args$`excluded_datasets`)
 dataset_identity <- resolve_dataset_identifier(args$name, args$`data.test_matrix`)
+order_path <- resolve_order_path(args$`data.label_key`, args$`data.test_matrix`, args$name)
 candidate_names <- unique(c(
   dataset_identity$dataset_id,
   dataset_identity$dataset_name,
@@ -227,12 +264,23 @@ candidate_names <- unique(c(
 ))
 candidate_names <- candidate_names[!is.na(candidate_names) & nzchar(candidate_names)]
 
-matched_identifier <- intersect(candidate_names, excluded_datasets)
+normalized_candidate_names <- unique(normalize_dataset_token(candidate_names))
+excluded_dataset_map <- stats::setNames(excluded_datasets, normalize_dataset_token(excluded_datasets))
+excluded_dataset_map <- excluded_dataset_map[nzchar(names(excluded_dataset_map))]
+
+matched_identifier_key <- intersect(normalized_candidate_names, names(excluded_dataset_map))
+matched_identifier <- if (length(matched_identifier_key) > 0) {
+  excluded_dataset_map[[matched_identifier_key[[1]]]]
+} else {
+  character(0)
+}
+
 skip_dataset <- length(matched_identifier) > 0
 if (skip_dataset) {
   message(sprintf(
-    "GateMeClass: dataset '%s' is excluded via '%s'; skipping training/inference and writing ungated predictions",
+    "GateMeClass: dataset '%s' resolved as '%s' and is excluded via '%s'; skipping training/inference and writing ungated predictions",
     args$name,
+    dataset_identity$dataset_name,
     matched_identifier[[1]]
   ))
 }
@@ -384,9 +432,9 @@ write_prediction_archive <- function() {
 
 if (skip_dataset) {
   message("GateMeClass: excluded dataset, writing zero prediction vectors")
-  cells_per_sample <- resolve_cells_per_sample(args$`data.test_matrix`, args$name)
+  cells_per_sample <- resolve_cells_per_sample(order_path)
   if (is.null(cells_per_sample)) {
-    stop("Could not resolve cells_per_sample metadata for excluded dataset.")
+    stop("Could not resolve cells_per_sample metadata for excluded dataset. Expected a sibling *.order.json(.gz) metadata file.")
   }
 
   for (idx in seq_along(test_sample_names)) {
@@ -592,6 +640,7 @@ if (is.na(cores) || cores < 1) {
   cores <- 1
 }
 cores <- min(cores, max_cores_env)
+message(sprintf("GateMeClass: using %d worker(s) with BLAS threads=%d", cores, blas_threads_env))
 if (length(test_members) > 1 && cores > 1) {
   results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores, mc.preschedule = FALSE)
   missing_result_idx <- which(vapply(results, is.null, logical(1)))
