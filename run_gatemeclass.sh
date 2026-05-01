@@ -18,9 +18,9 @@ fi
 train_matrix="${script_dir}/out/data/data_preprocessing/default/data_import.train.matrix.tar.gz"
 train_labels="${script_dir}/out/data/data_preprocessing/default/data_import.train.labels.tar.gz"
 test_matrix="${script_dir}/out/data/data_preprocessing/default/data_import.test.matrices.tar.gz"
-label_key="${script_dir}/out/data/data_preprocessing/default/data_import.label_key.json.gz"
+metadata_file="${script_dir}/out/data/data_preprocessing/default/data_import.metadata.json.gz"
 
-for required_file in "$train_matrix" "$train_labels" "$test_matrix" "$label_key"; do
+for required_file in "$train_matrix" "$train_labels" "$test_matrix" "$metadata_file"; do
   if [ ! -f "$required_file" ]; then
     echo "ERROR: missing input file: ${required_file}" >&2
     exit 1
@@ -40,7 +40,7 @@ cmd=(
   --data.train_matrix "${train_matrix}"
   --data.train_labels "${train_labels}"
   --data.test_matrix "${test_matrix}"
-  --data.label_key "${label_key}"
+  --data.metadata "${metadata_file}"
   --GMM_parameterization "${gmm_parameterization}"
   --sampling "${sampling}"
   --k "${k_value}"

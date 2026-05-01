@@ -87,8 +87,8 @@ parser$add_argument("--data.train_labels", type = "character", required = TRUE,
                     help = "tar.gz archive containing training labels CSV")
 parser$add_argument("--data.test_matrix", type = "character", required = TRUE,
                     help = "tar.gz archive containing test matrix CSVs")
-parser$add_argument("--data.label_key", type = "character", required = TRUE,
-                    help = "JSON.gz with id_to_label mapping and metadata.dataset_name")
+parser$add_argument("--data.metadata", type = "character", required = TRUE,
+                    help = "JSON.gz metadata payload with dataset, labels, and sample context")
 parser$add_argument("--seed", type = "integer", default = 42)
 parser$add_argument("--output_dir", "-o", type = "character", default = getwd())
 parser$add_argument("--name", "-n", type = "character", required = TRUE)
@@ -165,71 +165,48 @@ extract_dataset_root <- function(path_value) {
   NULL
 }
 
-resolve_dataset_name_from_label_key_metadata <- function(label_key_path) {
-  if (is.null(label_key_path) || !nzchar(label_key_path)) {
-    stop("--data.label_key is required and must point to a readable JSON(.gz) file.")
+read_metadata_payload <- function(metadata_path) {
+  if (is.null(metadata_path) || !nzchar(metadata_path)) {
+    stop("--data.metadata is required and must point to a readable JSON(.gz) file.")
   }
-  if (!file.exists(label_key_path)) {
-    stop("--data.label_key does not exist: ", label_key_path)
+  if (!file.exists(metadata_path)) {
+    stop("--data.metadata does not exist: ", metadata_path)
   }
 
-  payload <- tryCatch({
-    if (grepl("\\.gz$", label_key_path)) {
-      con <- gzfile(label_key_path, "rt")
+  tryCatch({
+    if (grepl("\\.gz$", metadata_path)) {
+      con <- gzfile(metadata_path, "rt")
       on.exit(close(con), add = TRUE)
       jsonlite::fromJSON(paste(readLines(con, warn = FALSE), collapse = ""))
     } else {
-      jsonlite::fromJSON(label_key_path)
+      jsonlite::fromJSON(metadata_path)
     }
   }, error = function(e) {
-    stop("Failed to read --data.label_key metadata from '", label_key_path, "': ", conditionMessage(e))
+    stop("Failed to read --data.metadata from '", metadata_path, "': ", conditionMessage(e))
   })
+}
 
-  if (is.null(payload) || !"metadata" %in% names(payload)) {
-    stop("--data.label_key must include a top-level 'metadata' object.")
+resolve_dataset_name_from_metadata <- function(metadata_payload) {
+  if (is.null(metadata_payload) || !is.list(metadata_payload)) {
+    stop("--data.metadata must decode to a JSON object.")
   }
 
-  if (!"dataset_name" %in% names(payload$metadata)) {
-    stop("--data.label_key metadata must include 'dataset_name'.")
+  dataset <- metadata_payload$dataset
+  if (is.null(dataset) || !is.list(dataset) || !"dataset_name" %in% names(dataset)) {
+    stop("--data.metadata dataset section must include 'dataset_name'.")
   }
 
-  dataset_name <- as.character(payload$metadata[["dataset_name"]])
+  dataset_name <- as.character(dataset[["dataset_name"]])
   if (!nzchar(dataset_name)) {
-    stop("--data.label_key metadata.dataset_name is empty.")
+    stop("--data.metadata dataset.dataset_name is empty.")
   }
 
   dataset_name
 }
 
-resolve_order_path <- function(label_key_path, test_matrix_path, dataset_id) {
-  candidates <- character(0)
-
-  if (!is.null(label_key_path) && nzchar(label_key_path)) {
-    candidates <- c(
-      candidates,
-      sub("\\.label_key\\.json\\.gz$", ".order.json.gz", label_key_path),
-      sub("\\.label_key\\.json$", ".order.json", label_key_path)
-    )
-  }
-
-  dataset_root <- extract_dataset_root(test_matrix_path)
-  if (!is.null(dataset_root) && nzchar(dataset_id)) {
-    candidates <- c(candidates, file.path(dataset_root, paste0(dataset_id, ".order.json.gz")))
-  }
-
-  candidates <- unique(candidates[nzchar(candidates)])
-  for (candidate in candidates) {
-    if (file.exists(candidate)) {
-      return(candidate)
-    }
-  }
-
-  NULL
-}
-
-resolve_dataset_identifier <- function(default_name, test_matrix_path) {
+resolve_dataset_identifier <- function(default_name, test_matrix_path, metadata_payload) {
   dataset_hash <- extract_dataset_hash(test_matrix_path)
-  dataset_name <- resolve_dataset_name_from_label_key_metadata(args$`data.label_key`)
+  dataset_name <- resolve_dataset_name_from_metadata(metadata_payload)
 
   list(
     dataset_id = default_name,
@@ -238,25 +215,40 @@ resolve_dataset_identifier <- function(default_name, test_matrix_path) {
   )
 }
 
-resolve_cells_per_sample <- function(order_path) {
-  if (is.null(order_path) || !file.exists(order_path)) {
+resolve_cells_per_sample <- function(metadata_payload) {
+  if (is.null(metadata_payload) || !is.list(metadata_payload)) {
     return(NULL)
   }
 
-  con <- gzfile(order_path, "rt")
-  on.exit(close(con), add = TRUE)
-  payload <- jsonlite::fromJSON(paste(readLines(con, warn = FALSE), collapse = ""))
-
-  if (!"metadata" %in% names(payload) || !"cells_per_sample" %in% names(payload$metadata)) {
+  samples <- metadata_payload$samples
+  if (is.null(samples) || !is.list(samples) || !"cells_per_sample" %in% names(samples)) {
     return(NULL)
   }
 
-  as.integer(payload$metadata$cells_per_sample)
+  as.integer(samples$cells_per_sample)
+}
+
+load_label_key <- function(metadata_payload) {
+  if (is.null(metadata_payload) || !is.list(metadata_payload)) {
+    return(NULL)
+  }
+
+  labels <- metadata_payload$labels
+  if (is.null(labels) || !is.list(labels) || !"id_to_label" %in% names(labels)) {
+    return(NULL)
+  }
+
+  id_to_label <- labels$id_to_label
+  mapping <- list()
+  for (id in names(id_to_label)) {
+    mapping[[id]] <- id_to_label[[id]]
+  }
+  mapping
 }
 
 excluded_datasets <- parse_excluded_datasets(args$`excluded_datasets`)
-dataset_identity <- resolve_dataset_identifier(args$name, args$`data.test_matrix`)
-order_path <- resolve_order_path(args$`data.label_key`, args$`data.test_matrix`, args$name)
+metadata_payload <- read_metadata_payload(args$`data.metadata`)
+dataset_identity <- resolve_dataset_identifier(args$name, args$`data.test_matrix`, metadata_payload)
 candidate_names <- unique(c(
   dataset_identity$dataset_id,
   dataset_identity$dataset_name,
@@ -368,32 +360,6 @@ get_sample_number <- function(file_name, fallback) {
   substr(base, m[1], m[1] + attr(m, "match.length") - 1)
 }
 
-load_label_key <- function(path) {
-  if (is.null(path) || !file.exists(path)) {
-    return(NULL)
-  }
-
-  if (grepl("\\.gz$", path)) {
-    con <- gzfile(path, "rt")
-    json_text <- paste(readLines(con, warn = FALSE), collapse = "")
-    close(con)
-  } else {
-    json_text <- paste(readLines(path, warn = FALSE), collapse = "")
-  }
-
-  parsed <- jsonlite::fromJSON(json_text)
-  if ("id_to_label" %in% names(parsed)) {
-    id_to_label <- parsed$id_to_label
-    mapping <- list()
-    for (id in names(id_to_label)) {
-      mapping[[id]] <- id_to_label[[id]]
-    }
-    return(mapping)
-  }
-
-  return(NULL)
-}
-
 message("GateMeClass: loading data")
 
 tmp_root <- file.path(tempdir(), paste0("gatemeclass_", Sys.getpid()))
@@ -432,9 +398,9 @@ write_prediction_archive <- function() {
 
 if (skip_dataset) {
   message("GateMeClass: excluded dataset, writing zero prediction vectors")
-  cells_per_sample <- resolve_cells_per_sample(order_path)
+  cells_per_sample <- resolve_cells_per_sample(metadata_payload)
   if (is.null(cells_per_sample)) {
-    stop("Could not resolve cells_per_sample metadata for excluded dataset. Expected a sibling *.order.json(.gz) metadata file.")
+    stop("Could not resolve cells_per_sample metadata for excluded dataset from --data.metadata.")
   }
 
   for (idx in seq_along(test_sample_names)) {
@@ -457,7 +423,7 @@ if (skip_dataset) {
   quit(status = 0)
 }
 
-label_key <- load_label_key(args$`data.label_key`)
+label_key <- load_label_key(metadata_payload)
 
 n_markers <- NULL
 simple_markers <- NULL
