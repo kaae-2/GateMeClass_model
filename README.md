@@ -6,7 +6,7 @@ Runs the GateMeClass R wrapper for cell-type annotation.
 
 - Wrapper: `gatemeclass_wrapper.R`
 - Local runner: `run_gatemeclass.sh`
-- Output: `gatemeclass_predicted_labels.tar.gz`
+- Output: `data_import_predicted_labels.tar.gz` by default
 
 The wrapper reads train/test tar archives, predicts labels per sample,
 and maps labels back to benchmark ids.
@@ -23,12 +23,25 @@ Optional exclusion list:
 GATEMECLASS_EXCLUDED_DATASETS=FR-FCM-Z3YR,flowcyt bash models/gatemeclass/run_gatemeclass.sh
 ```
 
+Run against specific benchmark outputs:
+
+```bash
+GATEMECLASS_TRAIN_MATRIX=/path/to/data_import.train.matrix.tar.gz \
+GATEMECLASS_TRAIN_LABELS=/path/to/data_import.train.labels.tar.gz \
+GATEMECLASS_TEST_MATRIX=/path/to/data_import.test.matrices.tar.gz \
+GATEMECLASS_METADATA=/path/to/data_import.metadata.json.gz \
+GATEMECLASS_OUTPUT_DIR=/tmp/gatemeclass-check \
+GATEMECLASS_EXCLUDED_DATASETS=FR-FCM-Z3YR,FlowCyt \
+bash models/gatemeclass/run_gatemeclass.sh
+```
+
 The local runner now matches the benchmark defaults more closely:
 
 - `GATEMECLASS_SAMPLING=0.1`
 - `GATEMECLASS_K=20`
 - `GATEMECLASS_CORES=1`
 - `GATEMECLASS_BLAS_THREADS=1`
+- `GATEMECLASS_NAME=data_import`
 
 Those conservative defaults are deliberate. GateMeClass can spike RSS when it
 annotates multiple samples in parallel, so raising worker count should be
@@ -52,3 +65,6 @@ just benchmark
 - Preprocessing outputs at `models/gatemeclass/out/data/data_preprocessing/default`
 - `Rscript` and GateMeClass dependencies in the conda env
 - Writable output directory `models/gatemeclass/out/data/analysis/default/gatemeclass`
+
+The input paths, output directory, run name, and model parameters can all be
+overridden with `GATEMECLASS_*` environment variables shown above.

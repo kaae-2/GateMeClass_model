@@ -215,19 +215,6 @@ resolve_dataset_identifier <- function(default_name, test_matrix_path, metadata_
   )
 }
 
-resolve_cells_per_sample <- function(metadata_payload) {
-  if (is.null(metadata_payload) || !is.list(metadata_payload)) {
-    return(NULL)
-  }
-
-  samples <- metadata_payload$samples
-  if (is.null(samples) || !is.list(samples) || !"cells_per_sample" %in% names(samples)) {
-    return(NULL)
-  }
-
-  as.integer(samples$cells_per_sample)
-}
-
 load_label_key <- function(metadata_payload) {
   if (is.null(metadata_payload) || !is.list(metadata_payload)) {
     return(NULL)
@@ -289,6 +276,21 @@ list_csv_members <- function(tar_path) {
 extract_member <- function(tar_path, member, extract_dir) {
   untar(tar_path, exdir = extract_dir, files = member)
   file.path(extract_dir, member)
+}
+
+count_csv_rows <- function(file_path) {
+  con <- if (grepl("\\.gz$", file_path)) gzfile(file_path, "rt") else file(file_path, "rt")
+  on.exit(close(con))
+
+  row_count <- 0L
+  repeat {
+    lines <- readLines(con, n = 100000L, warn = FALSE)
+    if (length(lines) == 0) {
+      break
+    }
+    row_count <- row_count + length(lines)
+  }
+  row_count
 }
 
 clean_member_name <- function(file_name) {
@@ -398,17 +400,12 @@ write_prediction_archive <- function() {
 
 if (skip_dataset) {
   message("GateMeClass: excluded dataset, writing zero prediction vectors")
-  cells_per_sample <- resolve_cells_per_sample(metadata_payload)
-  if (is.null(cells_per_sample)) {
-    stop("Could not resolve cells_per_sample metadata for excluded dataset from --data.metadata.")
-  }
+  excluded_extract_dir <- file.path(tmp_root, "excluded_test_samples")
+  dir.create(excluded_extract_dir, showWarnings = FALSE, recursive = TRUE)
 
   for (idx in seq_along(test_sample_names)) {
-    sample_idx <- suppressWarnings(as.integer(get_sample_number(test_members[[idx]], idx)))
-    if (is.na(sample_idx) || sample_idx < 1 || sample_idx > length(cells_per_sample)) {
-      stop(sprintf("Invalid sample index '%s' for excluded dataset output.", sample_idx))
-    }
-    row_count <- cells_per_sample[[sample_idx]]
+    test_path <- extract_member(args$`data.test_matrix`, test_members[[idx]], excluded_extract_dir)
+    row_count <- count_csv_rows(test_path)
 
     sample_number <- get_sample_number(test_sample_names[[idx]], idx)
     tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
