@@ -101,7 +101,7 @@ parser$add_argument("--k", type = "integer", default = 20,
 parser$add_argument("--sampling_imp_vars", type = "double", default = -1,
                     help = "Fraction of training cells for variable-importance step (<=0 defaults to --sampling / 10)")
 parser$add_argument("--excluded-datasets", type = "character", default = "",
-                    help = "Comma-separated dataset names to skip (outputs all 0 labels)")
+                    help = "Comma-separated dataset names that must not be run")
 
 args <- parser$parse_args()
 set.seed(args$seed)
@@ -256,8 +256,8 @@ matched_identifier <- if (length(matched_identifier_key) > 0) {
 
 skip_dataset <- length(matched_identifier) > 0
 if (skip_dataset) {
-  message(sprintf(
-    "GateMeClass: dataset '%s' resolved as '%s' and is excluded via '%s'; skipping training/inference and writing ungated predictions",
+  stop(sprintf(
+    "GateMeClass was not run: dataset '%s' resolved as '%s' and is excluded via '%s'; no predictions were produced",
     args$name,
     dataset_identity$dataset_name,
     matched_identifier[[1]]
@@ -398,28 +398,6 @@ write_prediction_archive <- function() {
   pred_archive
 }
 
-if (skip_dataset) {
-  message("GateMeClass: excluded dataset, writing zero prediction vectors")
-  excluded_extract_dir <- file.path(tmp_root, "excluded_test_samples")
-  dir.create(excluded_extract_dir, showWarnings = FALSE, recursive = TRUE)
-
-  for (idx in seq_along(test_sample_names)) {
-    test_path <- extract_member(args$`data.test_matrix`, test_members[[idx]], excluded_extract_dir)
-    row_count <- count_csv_rows(test_path)
-
-    sample_number <- get_sample_number(test_sample_names[[idx]], idx)
-    tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
-    writeLines(rep("0", row_count), tmp_file)
-  }
-
-  message("GateMeClass: writing archive")
-  write_prediction_archive()
-  unlink(tmp_pred_dir, recursive = TRUE)
-  unlink(tmp_root, recursive = TRUE)
-  message("GateMeClass: done")
-  quit(status = 0)
-}
-
 label_key <- load_label_key(metadata_payload)
 
 n_markers <- NULL
@@ -534,17 +512,13 @@ process_sample <- function(idx) {
     }
     test_dt <- fread(test_path, header = FALSE)
 
-    ungated_labels <- rep(NA_character_, nrow(test_dt))
-
     if (ncol(test_dt) != n_markers) {
-      message(sprintf(
-        "GateMeClass: sample '%s' has %d markers (expected %d); outputting Ungated for all cells",
+      stop(sprintf(
+        "Sample '%s' has %d markers; expected %d",
         test_name,
         ncol(test_dt),
         n_markers
       ))
-      out_file <- write_prediction_file(test_name, ungated_labels, idx)
-      return(list(ok = TRUE, name = test_name, file = out_file))
     }
     test_dt <- sanitize_matrix_dt(test_dt, test_name)
     setnames(test_dt, names(test_dt), simple_markers)
@@ -569,24 +543,17 @@ process_sample <- function(idx) {
 
     if (inherits(res, "error") || is.null(res$labels)) {
       reason <- if (inherits(res, "error")) conditionMessage(res) else "missing labels in annotation result"
-      message(sprintf(
-        "GateMeClass: annotation failed for sample '%s' (%s); outputting Ungated for all cells",
-        test_name,
-        reason
-      ))
-      out_file <- write_prediction_file(test_name, ungated_labels, idx)
-      return(list(ok = TRUE, name = test_name, file = out_file))
+      stop(sprintf("Annotation failed for sample '%s': %s", test_name, reason))
     }
 
     pred_labels <- as.character(res$labels)
     if (length(pred_labels) != nrow(test_dt)) {
-      message(sprintf(
-        "GateMeClass: sample '%s' produced %d labels for %d cells; outputting Ungated for all cells",
+      stop(sprintf(
+        "Sample '%s' produced %d labels for %d cells",
         test_name,
         length(pred_labels),
         nrow(test_dt)
       ))
-      pred_labels <- ungated_labels
     }
 
     out_file <- write_prediction_file(test_name, pred_labels, idx)
