@@ -15,6 +15,8 @@ script_dir <- if (length(script_path) > 0) {
   getwd()
 }
 
+source(file.path(script_dir, "prediction_mapping.R"))
+
 max_cores_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_CORES", "1")))
 if (is.na(max_cores_env) || max_cores_env < 1) {
   max_cores_env <- 1
@@ -486,14 +488,8 @@ if (!is.null(label_key)) {
 }
 
 write_prediction_file <- function(test_name, pred_labels, idx) {
-  if (!is.null(label_to_id)) {
-    pred_int <- label_to_id[pred_labels]
-  } else {
-    pred_int <- as.integer(gsub("^Type_", "", pred_labels))
-  }
-
-  pred_int[is.na(pred_int)] <- 0
-  out_labels <- as.character(as.integer(pred_int))
+  pred_int <- map_prediction_labels(pred_labels, label_to_id, test_name)
+  out_labels <- as.character(pred_int)
 
   sample_number <- get_sample_number(test_name, idx)
   tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
