@@ -792,6 +792,151 @@ GateMeClass_train <- function(reference = NULL,
   return(new_marker_table)
 }
 
+gatemeclass_knn_backends <- c("caret", "class", "kmknn")
+
+gatemeclass_fit_knn <- function(training_x,
+                                training_labels,
+                                k = 20,
+                                backend = "caret"){
+  backend <- match.arg(backend, gatemeclass_knn_backends)
+  training_x <- as.matrix(training_x)
+  training_labels <- factor(as.character(training_labels))
+  if(is.null(colnames(training_x))){
+    colnames(training_x) <- paste0("marker_", seq_len(ncol(training_x)))
+  }
+
+  if(nrow(training_x) != length(training_labels)){
+    stop("KNN training matrix and labels have different lengths")
+  }
+  if(nrow(training_x) < 1){
+    stop("KNN requires at least one training row")
+  }
+
+  effective_k <- min(as.integer(k), nrow(training_x))
+  if(is.na(effective_k) || effective_k < 1){
+    stop("KNN k must be at least 1")
+  }
+
+  if(backend == "caret"){
+    if(!requireNamespace("caret", quietly = TRUE)){
+      stop("The caret KNN backend requires the 'caret' package")
+    }
+    ctrl <- caret::trainControl(method = "none", returnData = FALSE)
+    fit <- caret::train(
+      x = training_x,
+      y = training_labels,
+      method = "knn",
+      trControl = ctrl,
+      tuneGrid = data.frame(k = effective_k)
+    )
+    return(list(
+      backend = backend,
+      model = fit$finalModel,
+      k = effective_k,
+      levels = levels(training_labels)
+    ))
+  }
+
+  if(backend == "class"){
+    if(!requireNamespace("class", quietly = TRUE)){
+      stop("The class KNN backend requires the 'class' package")
+    }
+    return(list(
+      backend = backend,
+      training_x = training_x,
+      training_labels = training_labels,
+      k = effective_k,
+      levels = levels(training_labels)
+    ))
+  }
+
+  if(!requireNamespace("BiocNeighbors", quietly = TRUE)){
+    stop("The kmknn KNN backend requires the 'BiocNeighbors' package")
+  }
+
+  rng_state <- if(exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)){
+    get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  }else{
+    NULL
+  }
+  index <- BiocNeighbors::buildIndex(
+    training_x,
+    BNPARAM = BiocNeighbors::KmknnParam(distance = "Euclidean")
+  )
+  if(!is.null(rng_state)){
+    assign(".Random.seed", rng_state, envir = .GlobalEnv)
+  }
+
+  list(
+    backend = backend,
+    index = index,
+    training_labels = training_labels,
+    k = effective_k,
+    levels = levels(training_labels)
+  )
+}
+
+gatemeclass_vote_neighbors <- function(neighbor_index, training_labels){
+  neighbor_index <- as.matrix(neighbor_index)
+  n_queries <- nrow(neighbor_index)
+  n_classes <- nlevels(training_labels)
+  row_ids <- rep(seq_len(n_queries), times = ncol(neighbor_index))
+  class_ids <- as.integer(training_labels[as.vector(neighbor_index)])
+  linear_ids <- row_ids + (class_ids - 1L) * n_queries
+  votes <- matrix(
+    tabulate(linear_ids, nbins = n_queries * n_classes),
+    nrow = n_queries,
+    ncol = n_classes
+  )
+  winners <- max.col(votes, ties.method = "random")
+  factor(levels(training_labels)[winners], levels = levels(training_labels))
+}
+
+gatemeclass_predict_knn <- function(fit,
+                                    control,
+                                    query_chunk_size = 50000L){
+  control <- as.matrix(control)
+  if(nrow(control) < 1){
+    return(factor(character(0), levels = fit$levels))
+  }
+
+  if(fit$backend == "caret"){
+    return(predict(fit$model, newdata = control, type = "class"))
+  }
+
+  if(fit$backend == "class"){
+    return(class::knn(
+      train = fit$training_x,
+      test = control,
+      cl = fit$training_labels,
+      k = fit$k,
+      use.all = TRUE
+    ))
+  }
+
+  query_chunk_size <- as.integer(query_chunk_size)
+  if(is.na(query_chunk_size) || query_chunk_size < 1){
+    stop("KNN query chunk size must be at least 1")
+  }
+
+  predictions <- character(nrow(control))
+  chunk_starts <- seq.int(1L, nrow(control), by = query_chunk_size)
+  for(chunk_start in chunk_starts){
+    chunk_end <- min(chunk_start + query_chunk_size - 1L, nrow(control))
+    chunk_rows <- seq.int(chunk_start, chunk_end)
+    neighbors <- BiocNeighbors::queryKNN(
+      query = control[chunk_rows, , drop = FALSE],
+      k = fit$k,
+      BNINDEX = fit$index
+    )
+    predictions[chunk_rows] <- as.character(
+      gatemeclass_vote_neighbors(neighbors$index, fit$training_labels)
+    )
+  }
+
+  factor(predictions, levels = fit$levels)
+}
+
 ## This is the annotation module of GateMeClass
 GateMeClass_annotate <- function(exp_matrix = NULL,
                                  marker_table = NULL,
@@ -805,9 +950,13 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
                                  narrow_marker_table = T,
                                  verbose = T,
                                  seed = 1,
-                                 diagnostics = F){
+                                 diagnostics = F,
+                                 knn_backend = "caret",
+                                 knn_query_chunk_size = 50000L,
+                                 return_cell_signatures = T){
 
   annotate_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
+  knn_backend <- match.arg(knn_backend, gatemeclass_knn_backends)
 
   set.seed(seed)
 
@@ -906,10 +1055,6 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
   expr_markers <- data.frame(matrix(ncol = ncol(exp_matrix_2), nrow = nrow(exp_matrix_2)))
   rownames(expr_markers) <- markers
 
-  exp_matrix_2 <- exp_matrix[markers, , drop = F]
-  expr_markers <- data.frame(matrix(ncol = ncol(exp_matrix_2), nrow = nrow(exp_matrix_2)))
-  rownames(expr_markers) <- markers
-
   ## Obtain the signature for the cells of the dataset to be annotated
   if(diagnostics){
     message("GateMeClass diagnostics - marker-expression GMM start")
@@ -957,16 +1102,22 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
   if(sampling < 1){
     res_temp <- rep("Unclassified", ncol(exp_matrix_pre_sampling))
     res_temp[s] <- res$labels
-    cell_signatures <- data.frame(Cell = rep(NA, ncol(exp_matrix_pre_sampling)),
-                                  Gate = rep(NA, ncol(exp_matrix_pre_sampling)),
-                                  Celltype = rep(NA, ncol(exp_matrix_pre_sampling)))
-
-
-    cell_signatures[s, ] <- res$cell_signatures
-    cell_signatures[setdiff(1:ncol(exp_matrix_pre_sampling), s), "Celltype"] <- "Unclassified"
+    if(return_cell_signatures){
+      cell_signatures <- data.frame(Cell = rep(NA, ncol(exp_matrix_pre_sampling)),
+                                    Gate = rep(NA, ncol(exp_matrix_pre_sampling)),
+                                    Celltype = rep(NA, ncol(exp_matrix_pre_sampling)))
+      cell_signatures[s, ] <- res$cell_signatures
+      cell_signatures[setdiff(1:ncol(exp_matrix_pre_sampling), s), "Celltype"] <- "Unclassified"
+    }else{
+      cell_signatures <- NULL
+    }
 
     res_temp <- list(labels = res_temp, marker_table = res$marker_table, cell_signatures = cell_signatures)
     res <- res_temp
+  }
+
+  if(!return_cell_signatures){
+    res$cell_signatures <- NULL
   }
 
   real_uncl <- which(res$labels == "Unclassified" & (1:ncol(exp_matrix_pre_sampling)) %in% s)
@@ -992,31 +1143,33 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
     }
 
     if(!reject_option){
-      training_set <- data.frame(labels = c(res$labels[not_uncl]), t(exp_matrix_pre_sampling[, not_uncl]))
+      training_x <- t(exp_matrix_pre_sampling[, not_uncl, drop = F])
+      training_labels <- res$labels[not_uncl]
       control <- t(exp_matrix_pre_sampling[, tot_uncl])
-      ctrl <- trainControl(method="none")
-      knn_training_rows <- nrow(training_set)
+      knn_training_rows <- nrow(training_x)
       knn_prediction_rows <- nrow(control)
       if(diagnostics){
         message("GateMeClass diagnostics - KNN fit start")
       }
       knn_fit_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
-      knnFit <- train(labels ~ ., data = training_set, method = "knn", trControl = ctrl, tuneGrid = expand.grid(k = k))
+      knnFit <- gatemeclass_fit_knn(training_x, training_labels, k, knn_backend)
       knn_fit_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_fit_start else 0
       if(diagnostics){
         message("GateMeClass diagnostics - KNN fit end")
         message("GateMeClass diagnostics - KNN predict start")
       }
       knn_predict_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
-      knn_res <- predict(knnFit, newdata = control)
+      knn_res <- gatemeclass_predict_knn(knnFit, control, knn_query_chunk_size)
       knn_predict_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_predict_start else 0
       if(diagnostics){
         message("GateMeClass diagnostics - KNN predict end")
       }
       res$labels[tot_uncl] <- as.character(knn_res)
-      res$cell_signatures$Celltype <- res$labels
-      res$cell_signatures$Cell[tot_uncl] <- tot_uncl
-      res$cell_signatures$Gate[tot_uncl] <- NA
+      if(return_cell_signatures){
+        res$cell_signatures$Celltype <- res$labels
+        res$cell_signatures$Cell[tot_uncl] <- tot_uncl
+        res$cell_signatures$Gate[tot_uncl] <- NA
+      }
     }else{
 
       if(length(real_uncl) > 0){
@@ -1051,53 +1204,58 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
         tot_uncl <- c(setdiff(tot_uncl, real_uncl[not_mnn]), to_reannotate)
         not_uncl <- setdiff(not_uncl, to_reannotate)
 
-        training_set <- data.frame(labels = c(res$labels[not_uncl], rep("Unclassified", length(not_mnn))), t(exp_matrix_pre_sampling[, c(not_uncl, real_uncl[not_mnn])]))
+        training_x <- t(exp_matrix_pre_sampling[, c(not_uncl, real_uncl[not_mnn]), drop = F])
+        training_labels <- c(res$labels[not_uncl], rep("Unclassified", length(not_mnn)))
         control <- t(exp_matrix_pre_sampling[, tot_uncl])
       }else{
-        training_set <- data.frame(labels = res$labels[not_uncl], t(exp_matrix_pre_sampling[, not_uncl]))
+        training_x <- t(exp_matrix_pre_sampling[, not_uncl, drop = F])
+        training_labels <- res$labels[not_uncl]
         control <- t(exp_matrix_pre_sampling[, not_real_uncl])
       }
 
-      ctrl <- trainControl(method="none")
-      knn_training_rows <- nrow(training_set)
+      knn_training_rows <- nrow(training_x)
       knn_prediction_rows <- nrow(control)
       if(diagnostics){
         message("GateMeClass diagnostics - KNN fit start")
       }
       knn_fit_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
-      knnFit <- train(labels ~ ., data = training_set, method = "knn", trControl = ctrl, tuneGrid = expand.grid(k = k))
+      knnFit <- gatemeclass_fit_knn(training_x, training_labels, k, knn_backend)
       knn_fit_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_fit_start else 0
       if(diagnostics){
         message("GateMeClass diagnostics - KNN fit end")
         message("GateMeClass diagnostics - KNN predict start")
       }
       knn_predict_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
-      knn_res <- predict(knnFit, newdata = control)
+      knn_res <- gatemeclass_predict_knn(knnFit, control, knn_query_chunk_size)
       knn_predict_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_predict_start else 0
       if(diagnostics){
         message("GateMeClass diagnostics - KNN predict end")
       }
       res$labels[tot_uncl] <- as.character(knn_res)
 
-      res$cell_signatures$Celltype <- res$labels
-      res$cell_signatures$Cell[not_real_uncl] <- not_real_uncl
-      res$cell_signatures$Gate[tot_uncl] <- NA
+      if(return_cell_signatures){
+        res$cell_signatures$Celltype <- res$labels
+        res$cell_signatures$Cell[not_real_uncl] <- not_real_uncl
+        res$cell_signatures$Gate[tot_uncl] <- NA
+      }
     }
   }
 
-  signatures <- res$cell_signatures
+  if(return_cell_signatures){
+    signatures <- res$cell_signatures
 
-  gate_ext <- sapply(signatures$Gate, function(v){
-    if(!is.na(v)){
-      split <- unlist(str_split(v, ""))
-      sig <- paste0(markers, split, collapse = "", sep = "")
-      return(sig)
-    }else{
-      return(NA)
-    }
-  })
+    gate_ext <- sapply(signatures$Gate, function(v){
+      if(!is.na(v)){
+        split <- unlist(str_split(v, ""))
+        sig <- paste0(markers, split, collapse = "", sep = "")
+        return(sig)
+      }else{
+        return(NA)
+      }
+    })
 
-  res$cell_signatures[, "Gate"] <- gate_ext
+    res$cell_signatures[, "Gate"] <- gate_ext
+  }
   res <- list(labels = res$labels,
               marker_table = marker_table,
               cell_signatures = res$cell_signatures)
@@ -1112,6 +1270,7 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
       directly_classified_cells = directly_classified_cells,
       directly_unclassified_cells = directly_unclassified_cells,
       knn_entered = knn_entered,
+      knn_backend = knn_backend,
       knn_training_rows = knn_training_rows,
       knn_prediction_rows = knn_prediction_rows,
       knn_fit_elapsed_seconds = unname(knn_fit_elapsed),

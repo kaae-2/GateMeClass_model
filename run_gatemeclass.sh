@@ -33,6 +33,9 @@ excluded_datasets="${GATEMECLASS_EXCLUDED_DATASETS:-}"
 gmm_parameterization="${GATEMECLASS_GMM_PARAMETERIZATION:-V}"
 sampling="${GATEMECLASS_SAMPLING:-0.1}"
 k_value="${GATEMECLASS_K:-20}"
+knn_backend="${GATEMECLASS_KNN_BACKEND:-caret}"
+knn_query_chunk_size="${GATEMECLASS_KNN_QUERY_CHUNK_SIZE:-50000}"
+workers="${GATEMECLASS_CORES:-1}"
 
 cmd=(
   conda run --no-capture-output -n "${model_name}" Rscript "${script_dir}/gatemeclass_wrapper.R"
@@ -45,6 +48,9 @@ cmd=(
   --GMM_parameterization "${gmm_parameterization}"
   --sampling "${sampling}"
   --k "${k_value}"
+  --knn-backend "${knn_backend}"
+  --knn-query-chunk-size "${knn_query_chunk_size}"
+  --workers "${workers}"
 )
 
 if [ -n "${excluded_datasets}" ]; then

@@ -46,7 +46,8 @@ annotate <- function(diagnostics) {
     narrow_marker_table = FALSE,
     verbose = FALSE,
     seed = 17,
-    diagnostics = diagnostics
+    diagnostics = diagnostics,
+    knn_backend = "caret"
   )
 }
 
@@ -82,6 +83,7 @@ expected_fields <- c(
   "directly_classified_cells",
   "directly_unclassified_cells",
   "knn_entered",
+  "knn_backend",
   "knn_training_rows",
   "knn_prediction_rows",
   "knn_fit_elapsed_seconds",
@@ -98,6 +100,7 @@ expect_true(
   "direct classification counters do not cover all cells"
 )
 expect_true(isTRUE(diagnostics$knn_entered), "sampling=1 unclassified cells did not enter KNN")
+expect_true(identical(diagnostics$knn_backend, "caret"), "KNN backend was not recorded")
 expect_true(
   diagnostics$knn_training_rows == diagnostics$directly_classified_cells,
   "KNN training row count is invalid"
@@ -128,6 +131,26 @@ expect_true(
   "final unclassified count is invalid"
 )
 
+without_signatures <- GateMeClass_annotate(
+  exp_matrix = exp_matrix,
+  marker_table = marker_table,
+  GMM_parameterization = "E",
+  reject_option = FALSE,
+  k = 1,
+  sampling = 1,
+  narrow_marker_table = FALSE,
+  verbose = FALSE,
+  seed = 17,
+  diagnostics = FALSE,
+  knn_backend = "caret",
+  return_cell_signatures = FALSE
+)
+expect_true(
+  identical(without_diagnostics$labels, without_signatures$labels),
+  "labels-only mode changed predictions"
+)
+expect_true(is.null(without_signatures$cell_signatures), "labels-only mode retained signatures")
+
 jsonl_record <- c(list(sample_name = "sample-1", test_member = "sample-1.csv"), diagnostics)
 jsonl_line <- jsonlite::toJSON(jsonl_record, auto_unbox = TRUE, null = "null", na = "null")
 jsonl_decoded <- jsonlite::fromJSON(jsonl_line)
@@ -147,7 +170,11 @@ wrapper_patterns <- c(
   "GateMeClass diagnostics - sample start:",
   "GateMeClass diagnostics - sample end:",
   "append_partial_diagnostics(results[[idx]]$diagnostics)",
-  "_gatemeclass_diagnostics.json"
+  "_gatemeclass_diagnostics.json",
+  "--knn-backend",
+  "--knn-query-chunk-size",
+  "--workers",
+  "return_cell_signatures = FALSE"
 )
 expect_true(
   all(vapply(wrapper_patterns, grepl, logical(1), x = wrapper_source, fixed = TRUE)),

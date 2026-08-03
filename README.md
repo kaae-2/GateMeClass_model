@@ -39,6 +39,8 @@ The local runner now matches the benchmark defaults more closely:
 
 - `GATEMECLASS_SAMPLING=0.1`
 - `GATEMECLASS_K=20`
+- `GATEMECLASS_KNN_BACKEND=caret`
+- `GATEMECLASS_KNN_QUERY_CHUNK_SIZE=50000`
 - `GATEMECLASS_CORES=1`
 - `GATEMECLASS_BLAS_THREADS=1`
 - `GATEMECLASS_NAME=data_import`
@@ -46,6 +48,20 @@ The local runner now matches the benchmark defaults more closely:
 Those conservative defaults are deliberate. GateMeClass can spike RSS when it
 annotates multiple samples in parallel, so raising worker count should be
 treated as a memory tradeoff rather than a free speedup.
+
+The wrapper supports three KNN backends:
+
+- `caret` uses the compatibility implementation with matrix-based fitting and
+  direct final-model prediction.
+- `class` removes caret's model wrapper but retains brute-force neighbor search.
+- `kmknn` uses the exact indexed `BiocNeighbors` KMKNN search and bounded query
+  chunks. It is normally faster, but caret's fuzzy boundary-distance ties and
+  randomized class-vote ties can produce different predictions on tied data.
+
+Backend selection is explicit so accepted benchmark runs cannot silently change
+KNN semantics. The wrapper only requests labels from the vendored annotation
+function; callers of `GateMeClass_annotate()` retain full cell signatures by
+default.
 
 Dataset exclusions are resolved from the passed label-key/order metadata first,
 then from path fallbacks. Matching is case-insensitive and ignores separators,

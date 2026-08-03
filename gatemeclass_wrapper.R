@@ -100,6 +100,13 @@ parser$add_argument("--sampling", type = "double", default = 0.1,
                     help = "Fraction of cells to use (0.0-1.0)")
 parser$add_argument("--k", type = "integer", default = 20,
                     help = "k parameter for KNN refinement")
+parser$add_argument("--knn-backend", type = "character", default = "caret",
+                    choices = c("caret", "class", "kmknn"),
+                    help = "KNN implementation: caret compatibility, class brute force, or exact KMKNN")
+parser$add_argument("--knn-query-chunk-size", type = "integer", default = 50000,
+                    help = "Maximum KMKNN query rows processed per chunk")
+parser$add_argument("--workers", type = "integer", default = 0,
+                    help = "Parallel test-sample workers; <=0 uses GATEMECLASS_CORES")
 parser$add_argument("--sampling_imp_vars", type = "double", default = -1,
                     help = "Fraction of training cells for variable-importance step (<=0 defaults to --sampling / 10)")
 parser$add_argument("--diagnostics", action = "store_true", default = FALSE,
@@ -110,6 +117,20 @@ parser$add_argument("--excluded-datasets", type = "character", default = "",
 args <- parser$parse_args()
 diagnostics_env <- tolower(trimws(Sys.getenv("GATEMECLASS_DIAGNOSTICS", "")))
 diagnostics_enabled <- isTRUE(args$diagnostics) || diagnostics_env %in% c("1", "true", "yes", "on")
+worker_limit <- if (!is.null(args$workers) && !is.na(args$workers) && args$workers > 0) {
+  args$workers
+} else {
+  max_cores_env
+}
+if (is.na(args$knn_query_chunk_size) || args$knn_query_chunk_size < 1) {
+  stop("--knn-query-chunk-size must be at least 1")
+}
+if (args$knn_backend == "class" && !requireNamespace("class", quietly = TRUE)) {
+  stop("--knn-backend=class requires the 'class' package")
+}
+if (args$knn_backend == "kmknn" && !requireNamespace("BiocNeighbors", quietly = TRUE)) {
+  stop("--knn-backend=kmknn requires the 'BiocNeighbors' package")
+}
 set.seed(args$seed)
 
 message("GateMeClass: starting")
@@ -555,9 +576,11 @@ process_sample <- function(idx) {
     test_dt <- sanitize_matrix_dt(test_dt, test_name)
     setnames(test_dt, names(test_dt), simple_markers)
 
+    test_rows <- nrow(test_dt)
     test_m <- as.matrix(test_dt)
     test_m <- t(test_m)
     rownames(test_m) <- simple_markers
+    rm(test_dt)
 
     res <- tryCatch(
       GateMeClass_annotate(
@@ -569,7 +592,10 @@ process_sample <- function(idx) {
         k = k_to_use,
         verbose = FALSE,
         seed = args$seed,
-        diagnostics = diagnostics_enabled
+        diagnostics = diagnostics_enabled,
+        knn_backend = args$knn_backend,
+        knn_query_chunk_size = args$knn_query_chunk_size,
+        return_cell_signatures = FALSE
       ),
       error = function(e) e
     )
@@ -580,12 +606,12 @@ process_sample <- function(idx) {
     }
 
     pred_labels <- as.character(res$labels)
-    if (length(pred_labels) != nrow(test_dt)) {
+    if (length(pred_labels) != test_rows) {
       stop(sprintf(
         "Sample '%s' produced %d labels for %d cells",
         test_name,
         length(pred_labels),
-        nrow(test_dt)
+        test_rows
       ))
     }
 
@@ -596,7 +622,7 @@ process_sample <- function(idx) {
       NULL
     }
 
-    rm(test_dt, test_m, pred_labels)
+    rm(test_m, pred_labels)
     list(ok = TRUE, name = test_name, file = out_file, diagnostics = sample_diagnostics)
   }, error = function(e) {
     list(ok = FALSE, name = test_name, error = conditionMessage(e))
@@ -615,7 +641,7 @@ cores <- parallel::detectCores(logical = TRUE)
 if (is.na(cores) || cores < 1) {
   cores <- 1
 }
-cores <- min(cores, max_cores_env)
+cores <- min(cores, worker_limit)
 message(sprintf("GateMeClass: using %d worker(s) with BLAS threads=%d", cores, blas_threads_env))
 if (length(test_members) > 1 && cores > 1) {
   results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores, mc.preschedule = FALSE)
@@ -668,6 +694,8 @@ if (diagnostics_enabled) {
       sampling = args$sampling,
       sampling_imp_vars = sampling_imp_vars_to_use,
       k = k_to_use,
+      knn_backend = args$knn_backend,
+      knn_query_chunk_size = args$knn_query_chunk_size,
       seed = args$seed,
       worker_count = cores,
       blas_thread_count = blas_threads_env
