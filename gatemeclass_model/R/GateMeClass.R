@@ -804,7 +804,10 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
                                  sampling = 0.1,
                                  narrow_marker_table = T,
                                  verbose = T,
-                                 seed = 1){
+                                 seed = 1,
+                                 diagnostics = F){
+
+  annotate_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
 
   set.seed(seed)
 
@@ -850,6 +853,9 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
     exp_matrix_pre_sampling <- exp_matrix
     s <- 1:ncol(exp_matrix_pre_sampling)
   }
+
+  total_cells <- ncol(exp_matrix_pre_sampling)
+  initially_sampled_cells <- length(s)
 
   if(!is.null(train_parameters$reference) & is.null(marker_table)){
     reference <- train_parameters$reference
@@ -905,6 +911,10 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
   rownames(expr_markers) <- markers
 
   ## Obtain the signature for the cells of the dataset to be annotated
+  if(diagnostics){
+    message("GateMeClass diagnostics - marker-expression GMM start")
+  }
+  marker_expression_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
   expr_markers <- set_marker_expression(exp_matrix_2,
                                         markers,
                                         type = new_gates$bimodal,
@@ -912,6 +922,10 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
                                         verbose = verbose,
                                         GMM_parameterization = GMM_parameterization,
                                         RSS = ifelse(GMM_parameterization == "E", F, T))
+  marker_expression_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - marker_expression_start else NULL
+  if(diagnostics){
+    message("GateMeClass diagnostics - marker-expression GMM end")
+  }
 
   expr_markers <- expr_markers[markers, ]
   expr_markers <- as.data.frame(t(expr_markers))
@@ -928,7 +942,15 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
 
 
   ######################## Slow part of code ##########################
+  if(diagnostics){
+    message("GateMeClass diagnostics - cell_classification start")
+  }
+  cell_classification_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
   res <- cell_classification(new_cells2, new_gates$extended_marker_table)
+  cell_classification_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - cell_classification_start else NULL
+  if(diagnostics){
+    message("GateMeClass diagnostics - cell_classification end")
+  }
   #####################################################################
 
 
@@ -954,8 +976,17 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
   real_not_uncl <- c(real_uncl, not_uncl)
   uncl_prec <- length(res$labels[tot_uncl])
 
+  directly_unclassified_cells <- sum(res$labels == "Unclassified")
+  directly_classified_cells <- length(res$labels) - directly_unclassified_cells
+  knn_entered <- F
+  knn_training_rows <- 0L
+  knn_prediction_rows <- 0L
+  knn_fit_elapsed <- 0
+  knn_predict_elapsed <- 0
+
   ## Refinement of the unclassified cells using K-NN classification
   if(uncl_prec > 0 & uncl_prec < ncol(exp_matrix_pre_sampling)){
+    knn_entered <- T
     if(verbose){
       message(paste0("GateMeClass annotate - Refinement of the labels..."))
     }
@@ -964,8 +995,24 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
       training_set <- data.frame(labels = c(res$labels[not_uncl]), t(exp_matrix_pre_sampling[, not_uncl]))
       control <- t(exp_matrix_pre_sampling[, tot_uncl])
       ctrl <- trainControl(method="none")
+      knn_training_rows <- nrow(training_set)
+      knn_prediction_rows <- nrow(control)
+      if(diagnostics){
+        message("GateMeClass diagnostics - KNN fit start")
+      }
+      knn_fit_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
       knnFit <- train(labels ~ ., data = training_set, method = "knn", trControl = ctrl, tuneGrid = expand.grid(k = k))
+      knn_fit_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_fit_start else 0
+      if(diagnostics){
+        message("GateMeClass diagnostics - KNN fit end")
+        message("GateMeClass diagnostics - KNN predict start")
+      }
+      knn_predict_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
       knn_res <- predict(knnFit, newdata = control)
+      knn_predict_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_predict_start else 0
+      if(diagnostics){
+        message("GateMeClass diagnostics - KNN predict end")
+      }
       res$labels[tot_uncl] <- as.character(knn_res)
       res$cell_signatures$Celltype <- res$labels
       res$cell_signatures$Cell[tot_uncl] <- tot_uncl
@@ -1012,8 +1059,24 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
       }
 
       ctrl <- trainControl(method="none")
+      knn_training_rows <- nrow(training_set)
+      knn_prediction_rows <- nrow(control)
+      if(diagnostics){
+        message("GateMeClass diagnostics - KNN fit start")
+      }
+      knn_fit_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
       knnFit <- train(labels ~ ., data = training_set, method = "knn", trControl = ctrl, tuneGrid = expand.grid(k = k))
+      knn_fit_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_fit_start else 0
+      if(diagnostics){
+        message("GateMeClass diagnostics - KNN fit end")
+        message("GateMeClass diagnostics - KNN predict start")
+      }
+      knn_predict_start <- if(diagnostics) proc.time()[["elapsed"]] else NULL
       knn_res <- predict(knnFit, newdata = control)
+      knn_predict_elapsed <- if(diagnostics) proc.time()[["elapsed"]] - knn_predict_start else 0
+      if(diagnostics){
+        message("GateMeClass diagnostics - KNN predict end")
+      }
       res$labels[tot_uncl] <- as.character(knn_res)
 
       res$cell_signatures$Celltype <- res$labels
@@ -1038,6 +1101,25 @@ GateMeClass_annotate <- function(exp_matrix = NULL,
   res <- list(labels = res$labels,
               marker_table = marker_table,
               cell_signatures = res$cell_signatures)
+
+  if(diagnostics){
+    res$diagnostics <- list(
+      total_cells = total_cells,
+      requested_sampling = sampling,
+      initially_sampled_cells = initially_sampled_cells,
+      marker_expression_gmm_elapsed_seconds = unname(marker_expression_elapsed),
+      cell_classification_elapsed_seconds = unname(cell_classification_elapsed),
+      directly_classified_cells = directly_classified_cells,
+      directly_unclassified_cells = directly_unclassified_cells,
+      knn_entered = knn_entered,
+      knn_training_rows = knn_training_rows,
+      knn_prediction_rows = knn_prediction_rows,
+      knn_fit_elapsed_seconds = unname(knn_fit_elapsed),
+      knn_predict_elapsed_seconds = unname(knn_predict_elapsed),
+      final_unclassified_cells = sum(res$labels == "Unclassified"),
+      total_annotate_elapsed_seconds = unname(proc.time()[["elapsed"]] - annotate_start)
+    )
+  }
 
   return(res)
 }
