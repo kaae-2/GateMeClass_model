@@ -256,8 +256,8 @@ matched_identifier <- if (length(matched_identifier_key) > 0) {
 
 skip_dataset <- length(matched_identifier) > 0
 if (skip_dataset) {
-  stop(sprintf(
-    "GateMeClass was not run: dataset '%s' resolved as '%s' and is excluded via '%s'; no predictions were produced",
+  message(sprintf(
+    "GateMeClass: dataset '%s' resolved as '%s' and is excluded via '%s'; writing NA-only prediction archive",
     args$name,
     dataset_identity$dataset_name,
     matched_identifier[[1]]
@@ -486,14 +486,17 @@ if (!is.null(label_key)) {
 }
 
 write_prediction_file <- function(test_name, pred_labels, idx) {
-  if (!is.null(label_to_id)) {
+  if (skip_dataset) {
+    out_labels <- rep("NA", length(pred_labels))
+  } else if (!is.null(label_to_id)) {
     pred_int <- label_to_id[pred_labels]
+    pred_int[is.na(pred_int)] <- 0
+    out_labels <- as.character(as.integer(pred_int))
   } else {
     pred_int <- as.integer(gsub("^Type_", "", pred_labels))
+    pred_int[is.na(pred_int)] <- 0
+    out_labels <- as.character(as.integer(pred_int))
   }
-
-  pred_int[is.na(pred_int)] <- 0
-  out_labels <- as.character(as.integer(pred_int))
 
   sample_number <- get_sample_number(test_name, idx)
   tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
@@ -510,6 +513,13 @@ process_sample <- function(idx) {
     if (!file.exists(test_path)) {
       stop(sprintf("Missing extracted test member: %s", test_member))
     }
+
+    if (skip_dataset) {
+      row_count <- count_csv_rows(test_path)
+      out_file <- write_prediction_file(test_name, rep(NA_character_, row_count), idx)
+      return(list(ok = TRUE, name = test_name, file = out_file))
+    }
+
     test_dt <- fread(test_path, header = FALSE)
 
     if (ncol(test_dt) != n_markers) {
