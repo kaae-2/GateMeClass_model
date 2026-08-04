@@ -15,8 +15,6 @@ script_dir <- if (length(script_path) > 0) {
   getwd()
 }
 
-source(file.path(script_dir, "prediction_mapping.R"))
-
 max_cores_env <- suppressWarnings(as.integer(Sys.getenv("GATEMECLASS_CORES", "1")))
 if (is.na(max_cores_env) || max_cores_env < 1) {
   max_cores_env <- 1
@@ -100,37 +98,12 @@ parser$add_argument("--sampling", type = "double", default = 0.1,
                     help = "Fraction of cells to use (0.0-1.0)")
 parser$add_argument("--k", type = "integer", default = 20,
                     help = "k parameter for KNN refinement")
-parser$add_argument("--knn-backend", type = "character", default = "caret",
-                    choices = c("caret", "class", "kmknn"),
-                    help = "KNN implementation: caret compatibility, class brute force, or exact KMKNN")
-parser$add_argument("--knn-query-chunk-size", type = "integer", default = 50000,
-                    help = "Maximum KMKNN query rows processed per chunk")
-parser$add_argument("--workers", type = "integer", default = 0,
-                    help = "Parallel test-sample workers; <=0 uses GATEMECLASS_CORES")
 parser$add_argument("--sampling_imp_vars", type = "double", default = -1,
                     help = "Fraction of training cells for variable-importance step (<=0 defaults to --sampling / 10)")
-parser$add_argument("--diagnostics", action = "store_true", default = FALSE,
-                    help = "Write optional phase diagnostics JSON")
 parser$add_argument("--excluded-datasets", type = "character", default = "",
                     help = "Comma-separated dataset names that must not be run")
 
 args <- parser$parse_args()
-diagnostics_env <- tolower(trimws(Sys.getenv("GATEMECLASS_DIAGNOSTICS", "")))
-diagnostics_enabled <- isTRUE(args$diagnostics) || diagnostics_env %in% c("1", "true", "yes", "on")
-worker_limit <- if (!is.null(args$workers) && !is.na(args$workers) && args$workers > 0) {
-  args$workers
-} else {
-  max_cores_env
-}
-if (is.na(args$knn_query_chunk_size) || args$knn_query_chunk_size < 1) {
-  stop("--knn-query-chunk-size must be at least 1")
-}
-if (args$knn_backend == "class" && !requireNamespace("class", quietly = TRUE)) {
-  stop("--knn-backend=class requires the 'class' package")
-}
-if (args$knn_backend == "kmknn" && !requireNamespace("BiocNeighbors", quietly = TRUE)) {
-  stop("--knn-backend=kmknn requires the 'BiocNeighbors' package")
-}
 set.seed(args$seed)
 
 message("GateMeClass: starting")
@@ -293,23 +266,6 @@ if (skip_dataset) {
 
 output_dir_abs <- normalizePath(args$output_dir, mustWork = FALSE)
 dir.create(output_dir_abs, recursive = TRUE, showWarnings = FALSE)
-diagnostics_partial_path <- file.path(
-  output_dir_abs,
-  paste0(args$name, "_gatemeclass_diagnostics.partial.jsonl")
-)
-if (diagnostics_enabled && file.exists(diagnostics_partial_path)) {
-  unlink(diagnostics_partial_path)
-  if (file.exists(diagnostics_partial_path)) {
-    stop("Failed to remove stale diagnostics file: ", diagnostics_partial_path)
-  }
-}
-
-append_partial_diagnostics <- function(record) {
-  con <- file(diagnostics_partial_path, open = "at")
-  on.exit(close(con))
-  writeLines(jsonlite::toJSON(record, auto_unbox = TRUE, null = "null", na = "null"), con)
-  flush(con)
-}
 
 list_csv_members <- function(tar_path) {
   members <- untar(tar_path, list = TRUE)
@@ -448,7 +404,6 @@ n_markers <- NULL
 simple_markers <- NULL
 k_to_use <- if (is.null(args$k) || args$k <= 0) 20 else args$k
 marker_table <- NULL
-marker_table_training_elapsed_seconds <- NULL
 
 if (!skip_dataset) {
   train_members <- list_csv_members(args$`data.train_matrix`)
@@ -508,7 +463,6 @@ if (!skip_dataset) {
   sampling_imp_vars_to_use <- max(min(sampling_imp_vars_to_use, 1), 1e-06)
 
   message("GateMeClass: training marker table")
-  marker_table_training_start <- if (diagnostics_enabled) proc.time()[["elapsed"]] else NULL
   marker_table <- GateMeClass_train(
     reference = train_m,
     labels = train_labels,
@@ -517,11 +471,6 @@ if (!skip_dataset) {
     seed = args$seed,
     verbose = FALSE
   )
-  if (diagnostics_enabled) {
-    marker_table_training_elapsed_seconds <- unname(
-      proc.time()[["elapsed"]] - marker_table_training_start
-    )
-  }
 }
 
 test_extract_dir <- file.path(tmp_root, "test_samples")
@@ -537,8 +486,14 @@ if (!is.null(label_key)) {
 }
 
 write_prediction_file <- function(test_name, pred_labels, idx) {
-  pred_int <- map_prediction_labels(pred_labels, label_to_id, test_name)
-  out_labels <- as.character(pred_int)
+  if (!is.null(label_to_id)) {
+    pred_int <- label_to_id[pred_labels]
+  } else {
+    pred_int <- as.integer(gsub("^Type_", "", pred_labels))
+  }
+
+  pred_int[is.na(pred_int)] <- 0
+  out_labels <- as.character(as.integer(pred_int))
 
   sample_number <- get_sample_number(test_name, idx)
   tmp_file <- file.path(tmp_pred_dir, sprintf("%s-prediction-%s.csv", args$name, sample_number))
@@ -549,14 +504,6 @@ write_prediction_file <- function(test_name, pred_labels, idx) {
 process_sample <- function(idx) {
   test_member <- test_members[[idx]]
   test_name <- test_sample_names[[idx]]
-
-  if (diagnostics_enabled) {
-    message(sprintf(
-      "GateMeClass diagnostics - sample start: name='%s' member='%s'",
-      test_name,
-      test_member
-    ))
-  }
 
   tryCatch({
     test_path <- file.path(test_extract_dir, test_member)
@@ -576,11 +523,9 @@ process_sample <- function(idx) {
     test_dt <- sanitize_matrix_dt(test_dt, test_name)
     setnames(test_dt, names(test_dt), simple_markers)
 
-    test_rows <- nrow(test_dt)
     test_m <- as.matrix(test_dt)
     test_m <- t(test_m)
     rownames(test_m) <- simple_markers
-    rm(test_dt)
 
     res <- tryCatch(
       GateMeClass_annotate(
@@ -591,11 +536,7 @@ process_sample <- function(idx) {
         sampling = args$sampling,
         k = k_to_use,
         verbose = FALSE,
-        seed = args$seed,
-        diagnostics = diagnostics_enabled,
-        knn_backend = args$knn_backend,
-        knn_query_chunk_size = args$knn_query_chunk_size,
-        return_cell_signatures = FALSE
+        seed = args$seed
       ),
       error = function(e) e
     )
@@ -606,34 +547,21 @@ process_sample <- function(idx) {
     }
 
     pred_labels <- as.character(res$labels)
-    if (length(pred_labels) != test_rows) {
+    if (length(pred_labels) != nrow(test_dt)) {
       stop(sprintf(
         "Sample '%s' produced %d labels for %d cells",
         test_name,
         length(pred_labels),
-        test_rows
+        nrow(test_dt)
       ))
     }
 
     out_file <- write_prediction_file(test_name, pred_labels, idx)
-    sample_diagnostics <- if (diagnostics_enabled) {
-      c(list(sample_name = test_name, test_member = test_member), res$diagnostics)
-    } else {
-      NULL
-    }
 
-    rm(test_m, pred_labels)
-    list(ok = TRUE, name = test_name, file = out_file, diagnostics = sample_diagnostics)
+    rm(test_dt, test_m, pred_labels)
+    list(ok = TRUE, name = test_name, file = out_file)
   }, error = function(e) {
     list(ok = FALSE, name = test_name, error = conditionMessage(e))
-  }, finally = {
-    if (diagnostics_enabled) {
-      message(sprintf(
-        "GateMeClass diagnostics - sample end: name='%s' member='%s'",
-        test_name,
-        test_member
-      ))
-    }
   })
 }
 
@@ -641,7 +569,7 @@ cores <- parallel::detectCores(logical = TRUE)
 if (is.na(cores) || cores < 1) {
   cores <- 1
 }
-cores <- min(cores, worker_limit)
+cores <- min(cores, max_cores_env)
 message(sprintf("GateMeClass: using %d worker(s) with BLAS threads=%d", cores, blas_threads_env))
 if (length(test_members) > 1 && cores > 1) {
   results <- parallel::mclapply(seq_along(test_members), process_sample, mc.cores = cores, mc.preschedule = FALSE)
@@ -655,21 +583,8 @@ if (length(test_members) > 1 && cores > 1) {
       results[[idx]] <- process_sample(idx)
     }
   }
-  if (diagnostics_enabled) {
-    for (res in results) {
-      if (!is.null(res) && isTRUE(res$ok)) {
-        append_partial_diagnostics(res$diagnostics)
-      }
-    }
-  }
 } else {
-  results <- vector("list", length(test_members))
-  for (idx in seq_along(test_members)) {
-    results[[idx]] <- process_sample(idx)
-    if (diagnostics_enabled && isTRUE(results[[idx]]$ok)) {
-      append_partial_diagnostics(results[[idx]]$diagnostics)
-    }
-  }
+  results <- lapply(seq_along(test_members), process_sample)
 }
 
 for (res in results) {
@@ -682,28 +597,6 @@ for (res in results) {
 
 message("GateMeClass: writing archive")
 write_prediction_archive()
-
-if (diagnostics_enabled) {
-  diagnostics_path <- file.path(output_dir_abs, paste0(args$name, "_gatemeclass_diagnostics.json"))
-  diagnostics_payload <- list(
-    schema_version = 1L,
-    run_name = args$name,
-    marker_table_training_elapsed_seconds = marker_table_training_elapsed_seconds,
-    parameters = list(
-      GMM_parameterization = args$GMM_parameterization,
-      sampling = args$sampling,
-      sampling_imp_vars = sampling_imp_vars_to_use,
-      k = k_to_use,
-      knn_backend = args$knn_backend,
-      knn_query_chunk_size = args$knn_query_chunk_size,
-      seed = args$seed,
-      worker_count = cores,
-      blas_thread_count = blas_threads_env
-    ),
-    samples = lapply(results, `[[`, "diagnostics")
-  )
-  jsonlite::write_json(diagnostics_payload, diagnostics_path, auto_unbox = TRUE, pretty = TRUE)
-}
 
 unlink(tmp_pred_dir, recursive = TRUE)
 unlink(tmp_root, recursive = TRUE)

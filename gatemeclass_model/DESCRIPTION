@@ -17,9 +17,7 @@ Depends:
     RcppAlgos,
     caret,
     BiocManager,
-    batchelor,
-    BiocNeighbors,
-    class
+    batchelor
 Imports:
 Suggests:
     ggplot2
